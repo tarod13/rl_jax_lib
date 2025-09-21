@@ -1,28 +1,29 @@
 #!/bin/bash
 # Setup script for RL library on Compute Canada
 
-# Load required system modules
-module load python/3.11 cuda/12.9
+# Force clear all modules and load required system modules
+module --force purge
+module load gcc python/3.11 cuda/12.9 mujoco/3.3.0
 
-# Create virtual environment (only if it doesn't exist)
-if [ ! -d "venv" ]; then
-    python -m venv venv
-fi
-
-# Activate the virtual environment
-source venv/bin/activate
+# Create and activate virtual environment
+virtualenv --no-download --clear ~/ENV && source ~/ENV/bin/activate
 
 # Update pip and install core ML packages
 pip install --upgrade pip
+
+# Install packages that don't conflict with system mujoco
 pip install jax flax optax tensorboard
 
-# Install Brax dependencies one by one to avoid conflicts
-pip install etils flask jaxopt trimesh
-
-# Install Brax without auto-installing problematic dependencies
+# Install brax with --no-deps to avoid mujoco version conflicts, then install missing deps manually
 pip install --no-deps brax
+
+# Install brax dependencies manually (excluding mujoco which we have from module)
+pip install etils flask flask-cors jaxopt jinja2 ml-collections mujoco-mjx tensorboardx trimesh
 
 # Prevent JAX from grabbing all GPU memory at once
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
+
+# Verify mujoco is working
+python -c "import mujoco; print(f'MuJoCo version: {mujoco.__version__}')"
 
 echo "Setup complete!"
