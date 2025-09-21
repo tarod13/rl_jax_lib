@@ -1,38 +1,28 @@
 #!/bin/bash
-# scripts/setup_remote.sh
+# Setup script for RL library on Compute Canada
 
-module load python/3.11 cuda/12.9 apptainer/1.2
+# Load required system modules
+module load python/3.11 cuda/12.9
 
+# Create virtual environment (only if it doesn't exist)
 if [ ! -d "venv" ]; then
     python -m venv venv
 fi
+
+# Activate the virtual environment
 source venv/bin/activate
 
-# Core packages are already installed, but let's ensure we have them
+# Update pip and install core ML packages
+pip install --upgrade pip
 pip install jax flax optax tensorboard
 
-# Set up MuJoCo environment BEFORE installing
-mkdir -p $HOME/.mujoco
-export MUJOCO_PATH=$HOME/.mujoco
+# Install Brax dependencies one by one to avoid conflicts
+pip install etils flask jaxopt trimesh
 
-# Download and install MuJoCo binaries
-cd $HOME/.mujoco
-if [ ! -f "mujoco-2.3.7-linux-x86_64.tar.gz" ]; then
-    wget https://github.com/deepmind/mujoco/releases/download/2.3.7/mujoco-2.3.7-linux-x86_64.tar.gz
-    tar -xzf mujoco-2.3.7-linux-x86_64.tar.gz
-fi
+# Install Brax without auto-installing problematic dependencies
+pip install --no-deps brax
 
-export MUJOCO_PATH=$HOME/.mujoco/mujoco-2.3.7
-export LD_LIBRARY_PATH=$MUJOCO_PATH/lib:$LD_LIBRARY_PATH
-
-# Go back to project directory
-cd $OLDPWD
-
-# Now install MuJoCo Python package
-pip install mujoco
-
-# Then install Brax
-pip install brax
+# Prevent JAX from grabbing all GPU memory at once
+export XLA_PYTHON_CLIENT_PREALLOCATE=false
 
 echo "Setup complete!"
-echo "MuJoCo path: $MUJOCO_PATH"
