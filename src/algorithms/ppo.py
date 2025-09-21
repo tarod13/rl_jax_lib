@@ -1,6 +1,6 @@
 # rl_lib/algorithms/ppo.py
-import jax
 import jax.numpy as jnp
+from flax import nnx
 import optax
 from .base import OnPolicyAlgorithm
 from ..networks import ActorCriticNetwork

@@ -1,6 +1,6 @@
 import jax
 import jax.numpy as jnp
-import jax.nnx as nnx
+from flax import nnx
 
 class ActorCriticNetwork(nnx.Module):
     def __init__(
