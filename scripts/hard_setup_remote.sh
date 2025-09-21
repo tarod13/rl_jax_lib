@@ -5,17 +5,13 @@
 module --force purge
 module load StdEnv/2023 gcc/14.3 python/3.11 cuda/12.9 mujoco/3.3.0
 
-# Create environment only if it doesn't exist
-if [ ! -d "~/ENV" ]; then
-    virtualenv --no-download ~/ENV
-fi
-
-source ~/ENV/bin/activate
+# Create and activate virtual environment
+virtualenv --no-download --clear ~/ENV && source ~/ENV/bin/activate
 
 # Update pip and install core ML packages
 pip install --upgrade pip
 
-# Install packages
+# Install packages that don't conflict with system mujoco
 pip install jax flax optax tensorboard
 
 # Install brax with --no-deps to avoid mujoco version conflicts, then install missing deps manually
