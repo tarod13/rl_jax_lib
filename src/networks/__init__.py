@@ -1,1 +1,1 @@
-from actor_critic_nets import ActorCriticNetwork
+from .actor_critic_nets import ActorCriticNetwork

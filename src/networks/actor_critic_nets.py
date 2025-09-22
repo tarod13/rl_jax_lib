@@ -4,7 +4,8 @@ from flax import nnx
 
 class ActorCriticNetwork(nnx.Module):
     def __init__(
-            self, 
+            self,
+            obs_dim: int, 
             action_dim: int, 
             hidden_dim: int = 256,
             limits: jnp.ndarray = None, 
@@ -12,15 +13,15 @@ class ActorCriticNetwork(nnx.Module):
         ):
         self.action_dim = action_dim
         self.hidden_dim = hidden_dim
-        self.limits = limits
+        self.limits = jnp.abs(limits).max(axis=1) if limits is not None else None
         self.rngs = rngs
 
-        self.dense1 = nnx.Linear(hidden_dim, rngs=rngs)
-        self.dense2 = nnx.Linear(hidden_dim, rngs=rngs)
-        self.policy_head_mean = nnx.Linear(action_dim, rngs=rngs)
-        self.policy_head_logstd = nnx.Linear(action_dim, rngs=rngs)
-        self.value_head = nnx.Linear(1, rngs=rngs) 
-    
+        self.dense1 = nnx.Linear(obs_dim, hidden_dim, rngs=rngs)
+        self.dense2 = nnx.Linear(hidden_dim, hidden_dim, rngs=rngs)
+        self.policy_head_mean = nnx.Linear(hidden_dim, action_dim, rngs=rngs)
+        self.policy_head_logstd = nnx.Linear(hidden_dim, action_dim, rngs=rngs)
+        self.value_head = nnx.Linear(hidden_dim, 1, rngs=rngs)
+
     def __call__(self, x):
         # Forward pass through shared layers
         x = nnx.relu(self.dense1(x))
