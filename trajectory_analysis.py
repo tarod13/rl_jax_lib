@@ -512,7 +512,7 @@ def load_and_analyze(trajectory_file):
 
 if __name__ == "__main__":
     # Example usage
-    trajectory_file = "rollout_data/trajectories_20250921_230304.pkl"  # Adjust path as needed
+    trajectory_file = "rollout_data/trajectories_20250922_193416.pkl"  # Adjust path as needed
     
     if Path(trajectory_file).exists():
         analyzer = load_and_analyze(trajectory_file)

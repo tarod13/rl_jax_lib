@@ -1,9 +1,13 @@
 # rl_lib/algorithms/ppo.py
+import jax
 import jax.numpy as jnp
 from flax import nnx
 import optax
+from brax import envs
+
 from .base import OnPolicyAlgorithm
 from ..networks import ActorCriticNetwork
+from ..utils import vectorized_rollouts, rollout_statistics
 
 
 class PPO(OnPolicyAlgorithm):
@@ -11,10 +15,21 @@ class PPO(OnPolicyAlgorithm):
             self, 
             config_param: dict,
         ):
+        # Initialize environment
+        self.env = envs.get_environment(config_param['env_name'])
+        self.action_dim = self.env.action_size
+        self.obs_dim = self.env.observation_size
+        self.limits = getattr(self.env.sys, 'actuator_ctrlrange', None)
+
         # Initialize network
         rngs = nnx.Rngs(config_param['seed'])
         self.network = ActorCriticNetwork(
-            config_param['action_dim'], config_param['hidden_dim'], rngs=rngs)
+            obs_dim=self.obs_dim,
+            action_dim=self.action_dim,
+            hidden_dim=config_param['hidden_dim'],
+            limits=self.limits,
+            rngs=rngs,
+        )
 
         # Initialize optimizer
         self.optimizer = nnx.Optimizer(
@@ -66,6 +81,27 @@ class PPO(OnPolicyAlgorithm):
         self.optimizer.update(grads)
         return loss
     
-    def collect_rollouts(self, env_state, key):
+
+    def collect_rollouts(self):
         # Implement rollout collection logic
+        trajectories = vectorized_rollouts(
+            env=self.env,
+            model=self.network,
+            num_rollouts=self.config['num_rollouts'],
+            episode_length=self.config['episode_length'],
+            deterministic=self.config['deterministic'],
+        )
+
+        rollout_stats = rollout_statistics(
+            trajectories, gamma=1.0,
+        )
+
+        return trajectories, rollout_stats
+
+    def train(self, env_state, key):
+        # Implement training loop logic
+        for training_step in range(self.config['num_training_steps']):
+            env_state, key = self.collect_rollouts(env_state, key)
+            # Further training logic goes here
+
         pass

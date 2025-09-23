@@ -9,7 +9,7 @@ import os
 from datetime import datetime
 
 # Import your network - adjust path as needed
-# from ..networks import ActorCriticNetwork
+from ..networks import ActorCriticNetwork
 
 
 def check_for_nans_numpy(data, name):
@@ -37,16 +37,16 @@ def safe_action_clipping(action, limits):
 
 def single_rollout(env, model, key, episode_length=1000, deterministic=True):
     """
-    Generate a single rollout - JAX compatible version.
+    Generate a single rollout with proper early termination handling.
     """
     # Reset environment
-    state = env.reset(key)
+    initial_state = env.reset(key)
     
     def step_fn(carry, step_idx):
-        state = carry
+        state, done_flag = carry
         obs = state.obs
         
-        # Get action from model
+        # Get action from model (only if not done)
         if deterministic:
             action = model.get_deterministic_action(obs)
         else:
@@ -55,25 +55,39 @@ def single_rollout(env, model, key, episode_length=1000, deterministic=True):
         # Safely clip actions (handles NaN)
         action = safe_action_clipping(action, getattr(env.sys, 'actuator_ctrlrange', None))
         
-        # Step environment
-        next_state = env.step(state, action)
+        # Only step environment if not already done
+        # If done, keep the same state to avoid invalid states
+        next_state = jax.lax.cond(
+            done_flag,
+            lambda s, a: s,  # If done, keep same state
+            lambda s, a: env.step(s, a),  # If not done, step normally
+            state, action
+        )
         
-        # Store trajectory data
+        # Update done flag
+        new_done_flag = done_flag | next_state.done.astype(bool)
+
+        # Update reward
+        reward = jnp.where(done_flag, 0.0, next_state.reward)  # Zero reward if already done
+        
+        # Store trajectory data with validity mask
         trajectory_step = {
             'obs': obs,
             'action': action,
-            'reward': next_state.reward,
-            'done': next_state.done,
+            'reward': reward,
+            'done': new_done_flag,
             'next_obs': next_state.obs,
-            'step_idx': step_idx
+            'step_idx': step_idx,
+            'valid': ~done_flag  # This step is valid if we weren't done before
         }
         
-        return next_state, trajectory_step
+        return (next_state, new_done_flag), trajectory_step
     
     # Run rollout using scan for efficiency
-    final_state, trajectory = jax.lax.scan(
+    initial_done = jnp.array(False, dtype=bool)
+    (final_state, final_done), trajectory = jax.lax.scan(
         step_fn,
-        state,
+        (initial_state, initial_done),  # Initial carry: (state, done_flag)
         jnp.arange(episode_length)
     )
     
@@ -251,25 +265,33 @@ def test_model_and_env(env, model, num_test_steps=10):
 
 def compute_returns(trajectories, gamma=1.0):
     """
-    Compute episode returns with discount factor.
+    Compute episode returns with discount factor and proper validity masking.
     """
     rewards = trajectories['reward']
     
+    # Use validity mask if available
+    if 'valid' in trajectories:
+        valid_mask = trajectories['valid']
+        # Mask out invalid rewards
+        masked_rewards = rewards * valid_mask
+    else:
+        masked_rewards = rewards
+    
     if gamma == 1.0:
         # Undiscounted returns
-        returns = jnp.sum(rewards, axis=-1)
+        returns = jnp.sum(masked_rewards, axis=-1)
     else:
         # Discounted returns
-        episode_length = rewards.shape[-1]
+        episode_length = masked_rewards.shape[-1]
         discount_factors = jnp.power(gamma, jnp.arange(episode_length))
-        discounted_rewards = rewards * discount_factors[None, :]
+        discounted_rewards = masked_rewards * discount_factors[None, :]
         returns = jnp.sum(discounted_rewards, axis=-1)
     
     return returns
 
 def rollout_statistics(trajectories, gamma=1.0):
     """
-    Compute comprehensive statistics from rollout data.
+    Compute comprehensive statistics from rollout data with validity handling.
     """
     returns = compute_returns(trajectories, gamma)
     rewards = trajectories['reward']
@@ -277,6 +299,12 @@ def rollout_statistics(trajectories, gamma=1.0):
     # Convert to numpy for statistics computation
     returns_np = np.array(returns)
     rewards_np = np.array(rewards)
+    
+    # Calculate episode lengths if validity mask is available
+    episode_lengths = None
+    if 'valid' in trajectories:
+        valid_mask = np.array(trajectories['valid'])
+        episode_lengths = np.sum(valid_mask, axis=1)
     
     # Basic statistics
     stats = {
@@ -299,6 +327,16 @@ def rollout_statistics(trajectories, gamma=1.0):
         'rewards_with_nan': int(np.sum(np.isnan(rewards_np))),
         'returns_finite': int(np.sum(np.isfinite(returns_np))),
     }
+    
+    # Add episode length statistics if available
+    if episode_lengths is not None:
+        stats.update({
+            'mean_episode_length': float(np.mean(episode_lengths)),
+            'std_episode_length': float(np.std(episode_lengths)),
+            'min_episode_length': float(np.min(episode_lengths)),
+            'max_episode_length': float(np.max(episode_lengths)),
+            'episodes_terminated_early': int(np.sum(episode_lengths < rewards_np.shape[-1]))
+        })
     
     return stats
 
@@ -397,10 +435,10 @@ def example_usage():
 
     # Create model - replace this with your actual model loading
     print("\n=== LOADING MODEL ===")
-    print("NOTE: Using dummy model for demonstration")
-    print("Replace this section with your actual ActorCriticNetwork loading")
+    # print("NOTE: Using dummy model for demonstration")
+    # print("Replace this section with your actual ActorCriticNetwork loading")
     
-    """
+    # """
     # Uncomment and modify this section for your actual model:
     model = ActorCriticNetwork(
         obs_dim=obs_dim,
@@ -410,17 +448,17 @@ def example_usage():
         rngs=nnx.Rngs(42)
     )
     
-    # Initialize parameters with dummy forward pass
-    key = jax.random.PRNGKey(42)
-    dummy_obs = jnp.ones((1, obs_dim))
-    _ = model(dummy_obs)
+    # # Initialize parameters with dummy forward pass
+    # key = jax.random.PRNGKey(42)
+    # dummy_obs = jnp.ones((1, obs_dim))
+    # _ = model(dummy_obs)
     
-    # Load your trained weights here
-    # model.load_state_dict(your_trained_weights)
-    """
+    # # Load your trained weights here
+    # # model.load_state_dict(your_trained_weights)
+    # """
     
-    # For demonstration, use dummy model
-    model = create_dummy_model(action_dim)
+    # # For demonstration, use dummy model
+    # model = create_dummy_model(action_dim)
     
     # Test model and environment before running full rollouts
     if not test_model_and_env(env, model, num_test_steps=5):
@@ -429,12 +467,13 @@ def example_usage():
     
     print("\n=== GENERATING ROLLOUTS ===")
     
-    # Start with a small number of rollouts
+    # Start with a small number of rollouts but test longer episodes
+    print("Testing with longer episodes (1000 steps)...")
     trajectories = vectorized_rollouts(
         env=env,
         model=model,
         num_rollouts=10,
-        episode_length=100,
+        episode_length=1000,  # Now testing with longer episodes
         deterministic=True
     )
     
@@ -448,11 +487,24 @@ def example_usage():
     for key, value in stats.items():
         print(f"  {key}: {value}")
     
+    # Additional analysis for early termination
+    if 'valid' in trajectories:
+        valid_steps = np.array(trajectories['valid'])
+        episode_lengths = np.sum(valid_steps, axis=1)
+        print(f"\nEpisode Length Analysis:")
+        print(f"  Episodes that terminated early: {np.sum(episode_lengths < 1000)}/{len(episode_lengths)}")
+        print(f"  Average episode length: {np.mean(episode_lengths):.1f}")
+        print(f"  Shortest episode: {np.min(episode_lengths)}")
+        print(f"  Longest episode: {np.max(episode_lengths)}")
+    
     # Check for issues
     if stats['returns_with_nan'] > 0:
         print(f"⚠️  WARNING: {stats['returns_with_nan']} episodes have NaN returns!")
     else:
         print("✅ No NaN values detected in returns")
+        
+    if stats.get('episodes_terminated_early', 0) > 0:
+        print(f"ℹ️  {stats['episodes_terminated_early']} episodes terminated before max length")
     
     # Save trajectories
     print("\n=== SAVING TRAJECTORIES ===")
