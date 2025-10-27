@@ -38,6 +38,13 @@ class PPO(OnPolicyAlgorithm):
         # Save config
         self.config = config_param
 
+    def extract_info_from_trajectories(self, trajectories):
+        obs = trajectories['obs']
+        actions = trajectories['actions']
+        rewards = trajectories['rewards']
+        dones = trajectories['dones']
+        return obs, actions, rewards, dones
+
     @nnx.jit
     def get_log_prob_and_value(self, obs, action, key):
         mean_action, logstd_action, value = self.network(obs)
@@ -80,7 +87,6 @@ class PPO(OnPolicyAlgorithm):
         )
         self.optimizer.update(grads)
         return loss
-    
 
     def collect_rollouts(self):
         # Implement rollout collection logic
@@ -90,6 +96,7 @@ class PPO(OnPolicyAlgorithm):
             num_rollouts=self.config['num_rollouts'],
             episode_length=self.config['episode_length'],
             deterministic=self.config['deterministic'],
+            seed=self.config['seed'],  # TODO: Sample new seed each time
         )
 
         rollout_stats = rollout_statistics(
@@ -101,7 +108,9 @@ class PPO(OnPolicyAlgorithm):
     def train(self, env_state, key):
         # Implement training loop logic
         for training_step in range(self.config['num_training_steps']):
-            env_state, key = self.collect_rollouts(env_state, key)
+            # Collect rollouts
+            trajectories, rollout_stats = self.collect_rollouts(env_state, key)
+            
             # Further training logic goes here
 
         pass

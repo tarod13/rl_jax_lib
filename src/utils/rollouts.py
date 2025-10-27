@@ -36,22 +36,23 @@ def single_rollout(env, model, key, episode_length=1000, deterministic=True):
         'done': jnp.empty(episode_length, dtype=bool),
         'next_obs': jnp.empty((episode_length,) + obs_shape),
         'step_idx': jnp.arange(episode_length),
-        'valid': jnp.empty(episode_length, dtype=bool)
+        'valid': jnp.empty(episode_length, dtype=bool),
     }
     
     def cond_fn(carry):
-        step_count, state, done_flag, _ = carry
+        step_count, state, done_flag, _, _ = carry
         return (step_count < episode_length) & (~done_flag)
     
     def body_fn(carry):
-        step_count, state, done_flag, trajectory = carry
+        step_count, state, done_flag, trajectory, key = carry
         obs = state.obs
         
         if deterministic:
             action = model.get_deterministic_action(obs)
         else:
-            action, _, _, _ = model.sample_action(obs)
-        
+            key, action_key = jax.random.split(key)
+            action, _, _, _ = model.sample_action(obs, action_key)
+
         action = safe_action_clipping(action, getattr(env.sys, 'actuator_ctrlrange', None))
         
         next_state = env.step(state, action)
@@ -65,40 +66,52 @@ def single_rollout(env, model, key, episode_length=1000, deterministic=True):
             'done': trajectory['done'].at[step_count].set(new_done_flag),
             'next_obs': trajectory['next_obs'].at[step_count].set(next_state.obs),
             'step_idx': trajectory['step_idx'],
-            'valid': trajectory['valid'].at[step_count].set(True)
+            'valid': trajectory['valid'].at[step_count].set(True),
         }
         
-        return step_count + 1, next_state, new_done_flag, updated_trajectory
+        return step_count + 1, next_state, new_done_flag, updated_trajectory, key
     
-    initial_carry = (0, initial_state, jnp.array(False, dtype=bool), empty_trajectory)
+    initial_carry = (0, initial_state, jnp.array(False, dtype=bool), empty_trajectory, key)
     final_carry = jax.lax.while_loop(cond_fn, body_fn, initial_carry)
 
     return final_carry[3]  # Return final trajectory
 
 
-def vectorized_rollouts(env, model, num_rollouts=100, episode_length=1000, deterministic=True):
+def vectorized_rollouts(
+        env, 
+        model, 
+        key,
+        num_rollouts=100, 
+        episode_length=1000, 
+        deterministic=True, 
+    ):
     """Generate multiple rollouts in parallel using JAX vectorization."""
+    # Wrap the single rollout function with fixed parameters
+    # The key will be the only varying argument to the wrapped function
     rollout_fn = functools.partial(
         single_rollout,
         env,
         model,
         episode_length=episode_length,
-        deterministic=deterministic
+        deterministic=deterministic,
     )
     
-    # Strategy 1: jit(vmap(func)) - JIT the vectorized function
+    # Vectorize and JIT the wrapped function
     vectorized_rollout_fn = jax.jit(jax.vmap(rollout_fn))
-    
-    key = jax.random.PRNGKey(42)
-    keys = jax.random.split(key, num_rollouts)
-    
-    trajectories = vectorized_rollout_fn(keys)
-    
-    return trajectories
+
+    # Generate rollout keys
+    keys = jax.random.split(key, num_rollouts + 1)
+    key = keys[0]
+    rollout_keys = keys[1:]
+
+    # Call the vectorized rollout function with the generated keys
+    trajectories = vectorized_rollout_fn(rollout_keys)
+
+    return trajectories, key
 
 
 def compute_returns(trajectories, gamma=1.0):
-    """Compute episode returns with discount factor and proper validity masking."""
+    """Compute episode running returns with discount factor and proper validity masking."""
     rewards = trajectories['reward']
     
     if 'valid' in trajectories:
@@ -107,22 +120,26 @@ def compute_returns(trajectories, gamma=1.0):
     else:
         masked_rewards = rewards
     
-    if gamma == 1.0:
-        returns = jnp.sum(masked_rewards, axis=-1)
-    else:
-        episode_length = masked_rewards.shape[-1]
-        discount_factors = jnp.power(gamma, jnp.arange(episode_length))
-        discounted_rewards = masked_rewards * discount_factors[None, :]
-        returns = jnp.sum(discounted_rewards, axis=-1)
-    
-    return returns
+    def discounted_sum(G, r):
+        updated_G = G * gamma + r
+        return updated_G, updated_G
+
+    init_returns = jnp.zeros(rewards.shape[0])  # Shape: (num_rollouts,)
+    final_returns, running_returns = jax.lax.scan(
+        discounted_sum, 
+        init = (init_returns),
+        xs = jnp.transpose(masked_rewards, (1, 0)),
+        reverse=True,
+    )  # Transpose so that the scan is along episode steps and not rollouts
+
+    return final_returns, jnp.transpose(running_returns, (1, 0))
 
 
 def rollout_statistics(trajectories, gamma=1.0):
     """Compute comprehensive statistics from rollout data."""
-    returns = compute_returns(trajectories, gamma)
+    returns, _ = compute_returns(trajectories, gamma)
     rewards = trajectories['reward']
-    
+
     returns_np = np.array(returns)
     rewards_np = np.array(rewards)
     
@@ -200,9 +217,11 @@ def example_usage():
         rngs=nnx.Rngs(42)
     )
     
-    trajectories = vectorized_rollouts(
+    key = jax.random.PRNGKey(0)
+    trajectories, key = vectorized_rollouts(
         env=env,
         model=model,
+        key=key,
         num_rollouts=100,
         episode_length=1000,
         deterministic=True

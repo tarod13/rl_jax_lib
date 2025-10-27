@@ -10,6 +10,17 @@ from pathlib import Path
 import warnings
 warnings.filterwarnings('ignore')
 
+# Set repository root
+_THIS_FILE = Path(__file__).resolve()
+if _THIS_FILE.parent.name == "tests":
+    REPO_ROOT = _THIS_FILE.parent.parent
+else:
+    REPO_ROOT = _THIS_FILE.parent
+
+def repo_path(p):
+    p = Path(p)
+    return p if p.is_absolute() else (REPO_ROOT / p)
+
 # Set style for better plots
 plt.style.use('seaborn-v0_8')
 sns.set_palette("husl")
@@ -199,6 +210,7 @@ class TrajectoryAnalyzer:
     
     def create_visualizations(self, save_dir="analysis_plots"):
         """Create comprehensive visualizations."""
+        save_dir = repo_path(save_dir)
         Path(save_dir).mkdir(exist_ok=True)
         
         # Set up the plotting
@@ -512,7 +524,7 @@ def load_and_analyze(trajectory_file):
 
 if __name__ == "__main__":
     # Example usage
-    trajectory_file = "rollout_data/trajectories_20250922_193416.pkl"  # Adjust path as needed
+    trajectory_file = repo_path("rollout_data/trajectories_20251025_142638.pkl")  # Desired path
     
     if Path(trajectory_file).exists():
         analyzer = load_and_analyze(trajectory_file)
