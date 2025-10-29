@@ -239,8 +239,7 @@ def save_training_plots(training_stats, save_path, algorithm_name="RL", dpi=150)
         algorithm_name: Name of the algorithm for plot titles
         dpi: Resolution of saved plot
     """
-    save_path_ = Path(save_path)
-    save_path_.mkdir(parents=True, exist_ok=True)
+    Path(save_path).parent.mkdir(parents=True, exist_ok=True)
     fig = plot_training_stats(training_stats, algorithm_name)
     fig.savefig(save_path, dpi=dpi, bbox_inches='tight')
     print(f"📊 Training plots saved to: {save_path}")

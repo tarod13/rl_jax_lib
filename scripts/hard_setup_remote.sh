@@ -20,6 +20,9 @@ pip install --no-deps brax
 # Install brax dependencies manually (excluding mujoco which we have from module)
 pip install etils flask flask-cors jaxopt jinja2 ml-collections mujoco-mjx==3.3.0 tensorboardx trimesh
 
+# Install additional utility packages
+pip install tqdm tyro
+
 # Prevent JAX from grabbing all GPU memory at once
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
 
