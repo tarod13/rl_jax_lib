@@ -2,9 +2,9 @@
 #SBATCH --job-name=reinforce_training
 #SBATCH --account=aip-machado
 #SBATCH --time=02:00:00                  # Maximum 2 hours per job
-#SBATCH --cpus-per-task=4                # Number of CPU cores
+#SBATCH --cpus-per-task=1                # Number of CPU cores
 #SBATCH --gres=gpu:1                     # Request 1 GPU
-#SBATCH --mem=16G                        # Memory per job
+#SBATCH --mem=4G                         # Memory per job
 #SBATCH --array=0-9                      # Run 10 jobs (seeds 42-51)
 #SBATCH --output=logs/reinforce_seed_%a.out
 #SBATCH --error=logs/reinforce_seed_%a.err
@@ -40,7 +40,7 @@ mkdir -p $CHECKPOINT_DIR
 mkdir -p $PLOT_DIR
 
 # Run training with seed-specific directories
-python test_reinforce.py \
+python tests/test_reinforce.py \
     --seed $SEED \
     --checkpoint_dir $CHECKPOINT_DIR \
     --plot_path $PLOT_PATH \
