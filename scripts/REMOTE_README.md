@@ -7,6 +7,7 @@ Quick reference for setting up and using the RL environment on Compute Canada.
 - **`hard_setup_remote.sh`** - Fresh install (clears existing environment)
 - **`setup_remote.sh`** - Regular setup (preserves existing environment if present)
 - **`activate_remote.sh`** - Activates the environment for each session
+- **`submit_job_XYZ.sh`** - SLURM job submission script
 
 ## Usage
 
@@ -78,4 +79,16 @@ ssh vulcan
 
 # Run code
 python rl_script.py
+```
+
+### Batch Job Submission
+
+```bash
+sbatch submit_job_XYZ.sh
+
+# Check job status
+squeue -u $USER
+
+# View logs (while running or after completion)
+tail -f logs/XYZ.out
 ```
