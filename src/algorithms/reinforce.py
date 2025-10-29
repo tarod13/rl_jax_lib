@@ -24,7 +24,7 @@ class REINFORCE(OnPolicyAlgorithm):
 
         # Initialize optimizer
         self.optimizer = nnx.Optimizer(
-            self.network, optax.adam(self.config.lr))
+            self.network, optax.adam(self.config.lr), wrt=nnx.Param)
 
     def get_log_prob(self, model, obs, action):
         mean_action, logstd_action = model(obs)
@@ -46,5 +46,5 @@ class REINFORCE(OnPolicyAlgorithm):
     def update(self, obs, actions, returns):
         loss_fn = lambda model: self.loss(model, obs, actions, returns)
         loss, grads = nnx.value_and_grad(loss_fn)(self.network)
-        self.optimizer.update(grads)
+        self.optimizer.update(self.network, grads)
         return loss, grads

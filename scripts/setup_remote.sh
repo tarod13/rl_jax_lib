@@ -6,7 +6,7 @@ module --force purge
 module load StdEnv/2023 gcc/14.3 python/3.11 cuda/12.9 mujoco/3.3.0
 
 # Create environment only if it doesn't exist
-if [ ! -d "~/ENV" ]; then
+if [ ! -d ~/ENV ]; then
     virtualenv --no-download ~/ENV
 fi
 
@@ -23,6 +23,9 @@ pip install --no-deps brax
 
 # Install brax dependencies manually (excluding mujoco which we have from module)
 pip install etils flask flask-cors jaxopt jinja2 ml-collections mujoco-mjx==3.3.0 tensorboardx trimesh
+
+# Install additional utility packages
+pip install tqdm
 
 # Prevent JAX from grabbing all GPU memory at once
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
