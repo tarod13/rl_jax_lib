@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=reinforce_training
+#SBATCH --job-name=reinforce_with_baseline_training
 #SBATCH --account=aip-machado
 #SBATCH --time=20:00:00                  # Maximum 20 hours per job
 #SBATCH --cpus-per-task=1                # Number of CPU cores
@@ -15,7 +15,7 @@ mkdir -p logs
 SEED=$((42 + SLURM_ARRAY_TASK_ID))
 
 echo "========================================"
-echo "Starting REINFORCE training"
+echo "Starting REINFORCE with baseline training"
 echo "Job ID: $SLURM_JOB_ID"
 echo "Array Task ID: $SLURM_ARRAY_TASK_ID"
 echo "Seed: $SEED"
@@ -39,7 +39,7 @@ mkdir -p $CHECKPOINT_DIR
 mkdir -p $PLOT_DIR
 
 # Run training with seed-specific directories
-python tests/test_reinforce.py \
+python tests/test_reinforce_baseline.py \
     --seed $SEED \
     --checkpoint_dir $CHECKPOINT_DIR \
     --plot_path $PLOT_PATH \
