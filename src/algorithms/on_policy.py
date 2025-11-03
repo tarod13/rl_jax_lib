@@ -47,16 +47,14 @@ class OnPolicyAlgorithm(RLAlgorithm):
 
         return trajectories, returns, key
 
-    def train(self, key, num_steps=None, checkpoint_dir=None, checkpoint_interval=0, start_step=0, keep_only_latest=True):
+    def train(self, key, num_steps=None, checkpoint_interval=0, keep_only_latest=True):
         """
         Train the on-policy agent.
         
         Args:
             key: Random key for rollouts
             num_steps: Number of training steps (if None, uses config)
-            checkpoint_dir: Directory to save checkpoints (if None, no checkpoints)
             checkpoint_interval: Save checkpoint every N steps (0 = no checkpoints)
-            start_step: Starting step number (for resuming)
             keep_only_latest: If True, only keep the most recent checkpoint (default: True)
             
         Returns:
@@ -98,7 +96,7 @@ class OnPolicyAlgorithm(RLAlgorithm):
                 step_grad_norms.append(grad_norm)
 
             # Print progress statistics
-            actual_step = start_step + training_step + 1
+            actual_step = training_step + 1
             episode_returns = returns[:, 0]  # Total episode returns
             mean_return = jnp.mean(episode_returns)
             std_return = jnp.std(episode_returns)
@@ -118,19 +116,18 @@ class OnPolicyAlgorithm(RLAlgorithm):
             grad_norm_history.append(step_grad_norms)
 
             # Save checkpoint if requested
-            if checkpoint_dir is not None and checkpoint_interval > 0:
-                if actual_step % checkpoint_interval == 0:
+            if checkpoint_interval > 0 and actual_step % checkpoint_interval == 0:
+                if self.experiment_manager is not None:
                     checkpoint_stats = {
                         'return_history': jnp.array(return_history),
                         'loss_history': jnp.array(loss_history),
                         'grad_norm_history': jnp.array(grad_norm_history),
                     }
                     self.save_checkpoint(
-                        checkpoint_dir, 
                         actual_step,
                         checkpoint_stats,
                         keep_only_latest=keep_only_latest
-                    )   
+                    )
 
         training_stats = {
             'return_history': jnp.array(return_history),

@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 from pathlib import Path
 import pickle
 from brax import envs
@@ -11,9 +11,10 @@ import jax.numpy as jnp
 class RLAlgorithm(nnx.Module, ABC):
     """Base class for RL algorithms."""
     
-    def __init__(self, config):
+    def __init__(self, config, experiment_manager=None):
         # Save config
         self.config = config
+        self.experiment_manager = experiment_manager
         
         # Initialize environment
         self.env = envs.get_environment(config.env_name)
@@ -56,13 +57,19 @@ class RLAlgorithm(nnx.Module, ABC):
         """Collect training data."""
         pass
     
-    def save_state(self, path):
+    def save_state(self, path: Optional[Path] = None):
         """
         Save agent state (network and optimizer).
         
         Args:
-            path: Path to save state file
+            path: Path to save state file. If None, uses experiment manager's path.
         """
+        if path is None:
+            if self.experiment_manager is None:
+                raise ValueError("Must provide path or experiment_manager")
+            # This will be called from save_checkpoint with explicit step
+            path = Path(path) if path else None
+        
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         
@@ -75,7 +82,7 @@ class RLAlgorithm(nnx.Module, ABC):
         
         print(f"💾 Agent state saved to: {path}")
     
-    def load_state(self, path):
+    def load_state(self, path: Path):
         """
         Load agent state (network and optimizer).
         
@@ -94,20 +101,21 @@ class RLAlgorithm(nnx.Module, ABC):
         # Update self with loaded state
         nnx.update(self, state)
         
-        print(f"📂 Agent state loaded from: {path}")
+        print(f"🔓 Agent state loaded from: {path}")
     
-    def save_checkpoint(self, checkpoint_dir, step, training_stats, keep_only_latest=True):
+    def save_checkpoint(self, step: int, training_stats: Dict, keep_only_latest: bool = True):
         """
-        Save training checkpoint.
+        Save training checkpoint using experiment manager.
         
         Args:
-            checkpoint_dir: Directory to save checkpoint
             step: Current training step
             training_stats: Dictionary of training statistics
             keep_only_latest: If True, delete previous checkpoints (default: True)
         """
-        checkpoint_dir = Path(checkpoint_dir)
-        checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        if self.experiment_manager is None:
+            raise ValueError("experiment_manager must be set to save checkpoints")
+        
+        checkpoint_dir = self.experiment_manager.checkpoints_dir
         
         # Delete old checkpoints if keep_only_latest is True
         if keep_only_latest:
@@ -122,7 +130,8 @@ class RLAlgorithm(nnx.Module, ABC):
                     print(f"⚠️  Warning: Could not remove {old_file.name}: {e}")
         
         # Save agent state
-        self.save_state(checkpoint_dir / f'agent_state_step_{step}.nnx')
+        agent_state_path = self.experiment_manager.get_agent_state_path(step)
+        self.save_state(agent_state_path)
         
         # Convert config to dict to avoid pickle issues with dataclasses
         if hasattr(self.config, '__dataclass_fields__'):
@@ -143,19 +152,22 @@ class RLAlgorithm(nnx.Module, ABC):
             'config': config_dict,  # Store as dict instead of object
         }
         
-        checkpoint_path = checkpoint_dir / f'checkpoint_step_{step}.pkl'
+        checkpoint_path = self.experiment_manager.get_checkpoint_path(step)
         with open(checkpoint_path, 'wb') as f:
             pickle.dump(checkpoint, f)
         
         print(f"💾 Checkpoint saved at step {step}: {checkpoint_path}")
     
     @classmethod
-    def load_checkpoint(cls, checkpoint_path, agent=None):
+    def load_checkpoint(cls, run_id: str, step: int, experiment_manager_class=None, experiments_root: str = "experiments", agent=None):
         """
-        Load training checkpoint.
+        Load training checkpoint using run ID and step.
         
         Args:
-            checkpoint_path: Path to checkpoint file
+            run_id: Unique run identifier
+            step: Checkpoint step to load
+            experiment_manager_class: ExperimentManager class (auto-imported if None)
+            experiments_root: Root directory for experiments
             agent: Optional existing agent to load state into
             
         Returns:
@@ -163,9 +175,19 @@ class RLAlgorithm(nnx.Module, ABC):
             training_stats: Training statistics dictionary
             step: Step number from checkpoint
         """
-        checkpoint_path = Path(checkpoint_path)
+        if experiment_manager_class is None:
+            from ..utils import ExperimentManager
+            experiment_manager_class = ExperimentManager
+        
+        # Create experiment manager for this run
+        exp_manager = experiment_manager_class(experiments_root=experiments_root, run_id=run_id)
         
         # Load checkpoint metadata
+        checkpoint_path = exp_manager.get_checkpoint_path(step)
+        
+        if not checkpoint_path.exists():
+            raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
+        
         with open(checkpoint_path, 'rb') as f:
             checkpoint = pickle.load(f)
         
@@ -179,15 +201,17 @@ class RLAlgorithm(nnx.Module, ABC):
             config = SimpleNamespace(**config)
         
         # Load agent state
-        agent_state_path = checkpoint_path.parent / f'agent_state_step_{step}.nnx'
+        agent_state_path = exp_manager.get_agent_state_path(step)
         
         if agent is None:
             # Create new agent with config from checkpoint
-            agent = cls(config)
+            agent = cls(config, experiment_manager=exp_manager)
+        else:
+            agent.experiment_manager = exp_manager
         
         agent.load_state(agent_state_path)
         
-        print(f"📂 Checkpoint loaded from step {step}: {checkpoint_path}")
+        print(f"🔓 Checkpoint loaded from step {step}: {checkpoint_path}")
         
         return agent, training_stats, step
 

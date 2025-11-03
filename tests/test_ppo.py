@@ -2,7 +2,8 @@ try:
     from src.algorithms.ppo import PPO
     from src.utils import (
         print_training_summary,
-        save_training_plots
+        save_training_plots,
+        ExperimentManager,
     )
 except:
     from pathlib import Path
@@ -17,13 +18,15 @@ except:
     from src.algorithms.ppo import PPO
     from src.utils import (
         print_training_summary,
-        save_training_plots
+        save_training_plots,
+        ExperimentManager,
     )
 
 from dataclasses import dataclass
 import tyro
 from pathlib import Path
 import jax.numpy as jnp
+from types import SimpleNamespace
 
 
 @dataclass
@@ -41,63 +44,114 @@ class Config:
     epsilon: float = 0.2
     use_bootstrap_for_final_states: bool = True
     
-    # Checkpointing
-    checkpoint_dir: str = 'checkpoints/ppo'
+    # Experiment tracking
+    experiments_root: str = 'experiments'
+    run_id: str | None = None  # Auto-generated if None
     checkpoint_interval: int = 5  # Save every N steps
-    resume_from: str | None = None  # 'checkpoint_step_20.pkl'  # Path to checkpoint to resume from
     keep_only_latest: bool = True  # Only keep the most recent checkpoint
     
-    # Plotting
-    plot_path: str = 'analysis_plots/training_plots_ppo.png'
+    # Resume training
+    resume_run_id: str | None = None  # Run ID to resume from
+    resume_step: int | None = None  # Specific step to resume from
 
 
 if __name__ == "__main__":
     config = tyro.cli(Config)
     
-    # Create checkpoint directory
-    checkpoint_dir = Path(config.checkpoint_dir)
-    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    print("="*60)
+    print("PPO Training with Experiment Manager")
+    print("="*60)
     
-    print("="*60)
-    print("PPO training")
-    print("="*60)
+    # Initialize experiment manager
+    exp_manager = ExperimentManager(
+        experiments_root=config.experiments_root,
+        run_id=config.run_id
+    )
     
     # Resume from checkpoint if specified
-    if config.resume_from is not None:
-        checkpoint_path = checkpoint_dir / config.resume_from
-        print(f"Resuming from checkpoint: {checkpoint_path}")
-        agent, training_stats, start_step = PPO.load_checkpoint(checkpoint_path)
-        # Update config with potentially new values
-        agent.config.num_training_steps = config.num_training_steps
-        agent.config.num_updates_per_step = config.num_updates_per_step
-        start_step += 1  # Start from next step
+    if config.resume_run_id is not None:
+        print(f"Resuming from run: {config.resume_run_id}")
+        
+        # Load the run's experiment manager and config
+        resume_exp_manager = ExperimentManager(
+            experiments_root=config.experiments_root,
+            run_id=config.resume_run_id
+        )
+        
+        # Load config from the run
+        run_config_dict = ExperimentManager.load_config(
+            config.resume_run_id,
+            experiments_root=config.experiments_root
+        )
+        run_config = SimpleNamespace(**run_config_dict)
+        
+        # Determine which step to load from
+        if config.resume_step is None:
+            # Load from latest checkpoint
+            available_steps = resume_exp_manager.list_checkpoints()
+            if available_steps:
+                config.resume_step = available_steps[-1]
+            else:
+                print("⚠️  No checkpoints found in resume run. Starting fresh.")
+                config.resume_step = None
+        
+        if config.resume_step is not None:
+            # Load agent from checkpoint
+            agent, training_stats, loaded_step = PPO.load_checkpoint(
+                run_id=config.resume_run_id,
+                step=config.resume_step,
+                experiment_manager_class=ExperimentManager,
+                experiments_root=config.experiments_root
+            )
+            
+            # Update agent's experiment manager to the new run (if creating new run)
+            # or keep the old one (if continuing in same run)
+            if config.run_id is None:
+                # If no run_id specified, we're in a new run
+                agent.experiment_manager = exp_manager
+            
+            print(f"✅ Resumed from step {loaded_step}")
+            start_step = loaded_step
+        else:
+            # Start fresh but use the config from the resumed run
+            agent = PPO(run_config, experiment_manager=exp_manager)
+            training_stats = {
+                'loss_history': [],
+                'grad_norm_history': [],
+                'return_history': [],
+            }
+            start_step = 0
     else:
-        print("Starting new training")
-        agent = PPO(config)
+        print("Starting new training run")
+        agent = PPO(config, experiment_manager=exp_manager)
         training_stats = {
             'loss_history': [],
             'grad_norm_history': [],
             'return_history': [],
         }
         start_step = 0
+        
+        # Save config for this run
+        exp_manager.save_config(config)
+    
+    # Print run information
+    exp_manager.print_run_info()
     
     print(f"Environment: {agent.config.env_name}")
     print(f"Training steps: {start_step} → {config.num_training_steps}")
     print(f"Updates per step: {config.num_updates_per_step}")
     print(f"Rollouts per step: {config.num_rollouts}")
-    print(f"Learning rate: {config.lr}")
-    print(f"Hidden dim: {config.hidden_dim}")
-    print(f"Seed: {config.seed}")
+    print(f"Learning rate: {agent.config.lr}")
+    print(f"Hidden dim: {agent.config.hidden_dim}")
+    print(f"Seed: {agent.config.seed}")
     print(f"Checkpoint interval: {config.checkpoint_interval}")
     print("="*60 + "\n")
     
     # Train the agent with checkpointing
     training_stats_new = agent.train(
         key=None,
-        num_steps=config.num_training_steps,
-        checkpoint_dir=checkpoint_dir if config.checkpoint_interval > 0 else None,
+        num_steps=config.num_training_steps - start_step,
         checkpoint_interval=config.checkpoint_interval,
-        start_step=start_step,
         keep_only_latest=config.keep_only_latest,
     )
     
@@ -121,11 +175,20 @@ if __name__ == "__main__":
     else:
         training_stats = training_stats_new
     
-    # Save final checkpoint using base class method
-    agent.save_checkpoint(checkpoint_dir, config.num_training_steps, training_stats, keep_only_latest=config.keep_only_latest)
+    # Save final checkpoint
+    agent.save_checkpoint(
+        config.num_training_steps,
+        training_stats,
+        keep_only_latest=config.keep_only_latest
+    )
     
     # Print summary using utility function
     print_training_summary(training_stats, algorithm_name="PPO")
     
     # Create and save plot using utility function
-    save_training_plots(training_stats, config.plot_path, algorithm_name="PPO")
+    plot_path = exp_manager.get_plot_path("PPO")
+    save_training_plots(training_stats, plot_path, algorithm_name="PPO")
+    
+    print(f"\n✅ Training complete!")
+    print(f"Run ID: {exp_manager.run_id}")
+    print(f"Results saved to: {exp_manager.run_dir}")

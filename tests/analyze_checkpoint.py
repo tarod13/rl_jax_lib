@@ -2,18 +2,28 @@
 Checkpoint Analysis Script
 
 This script allows you to analyze training checkpoints and generate plots
-without stopping the training process. You can check progress intermittently
-by pointing this script at your checkpoint directory.
+without stopping the training process. Works with the experiment manager
+to organize runs and their outputs.
 
 Usage:
-    python analyze_checkpoints.py --checkpoint-path checkpoints/checkpoint_step_10.pkl
-    python analyze_checkpoints.py --checkpoint-dir checkpoints --latest
+    # Analyze latest checkpoint from a run
+    python analyze_checkpoint.py --run-id run_20241103_143045_a1b2c3d4
+    
+    # Analyze specific step from a run
+    python analyze_checkpoint.py --run-id run_20241103_143045_a1b2c3d4 --step 50
+    
+    # List all available runs
+    python analyze_checkpoint.py --list-runs
+    
+    # List checkpoints in a run
+    python analyze_checkpoint.py --run-id run_20241103_143045_a1b2c3d4 --list-checkpoints
 """
 
 try:
     from src.utils import (
         print_training_summary,
-        save_training_plots
+        save_training_plots,
+        ExperimentManager,
     )
 except:
     from pathlib import Path
@@ -27,7 +37,8 @@ except:
     
     from src.utils import (
         print_training_summary,
-        save_training_plots
+        save_training_plots,
+        ExperimentManager,
     )
 
 from dataclasses import dataclass
@@ -115,7 +126,7 @@ def find_latest_checkpoint(checkpoint_dir: Path):
     return checkpoint_files[-1]
 
 
-def list_checkpoints(checkpoint_dir: Path):
+def list_checkpoints_in_dir(checkpoint_dir: Path):
     """
     List all available checkpoints in a directory.
     
@@ -132,7 +143,7 @@ def list_checkpoints(checkpoint_dir: Path):
         print(f"❌ No checkpoint files found in: {checkpoint_dir}")
         return
     
-    print(f"\n📁 Available checkpoints in {checkpoint_dir}:")
+    print(f"\n📂 Available checkpoints in {checkpoint_dir}:")
     print("=" * 60)
     for ckpt in checkpoint_files:
         step = int(ckpt.stem.split('_')[-1])
@@ -142,41 +153,87 @@ def list_checkpoints(checkpoint_dir: Path):
 
 @dataclass
 class AnalysisConfig:
-    checkpoint_path: Optional[str] = None  # Specific checkpoint file to analyze
-    checkpoint_dir: str = 'checkpoints/ppo'  # Directory containing checkpoints
-    latest: bool = True  # Use the latest checkpoint in the directory
-    list_checkpoints: bool = False  # List all available checkpoints
-    plot_path: str = 'analysis_plots/checkpoint_analysis_ppo.png'  # Where to save plots
+    experiments_root: str = 'experiments'  # Root directory for experiments
+    run_id: Optional[str] = None  # Run ID to analyze
+    step: Optional[int] = None  # Specific step to analyze (latest if None)
+    
+    list_runs: bool = False  # List all available runs
+    list_checkpoints: bool = False  # List checkpoints in the run
     algorithm_name: str = 'ppo'  # Name of the algorithm for plot titles
 
 
 def main():
     config = tyro.cli(AnalysisConfig)
     
-    checkpoint_dir = Path(config.checkpoint_dir)
+    # List all runs if requested
+    if config.list_runs:
+        print("\n" + "=" * 60)
+        print("AVAILABLE RUNS")
+        print("=" * 60)
+        runs = ExperimentManager.list_runs(config.experiments_root)
+        if not runs:
+            print("❌ No runs found in experiments directory")
+            return
+        
+        for run_id in runs:
+            exp_manager = ExperimentManager(config.experiments_root, run_id)
+            checkpoints = exp_manager.list_checkpoints()
+            print(f"  {run_id}")
+            print(f"    Latest step: {checkpoints[-1] if checkpoints else 'None'}")
+            print(f"    Total checkpoints: {len(checkpoints)}")
+        print("=" * 60 + "\n")
+        return
     
-    # List checkpoints if requested
+    # Check that run_id is provided
+    if config.run_id is None:
+        print("❌ Error: Must specify --run-id")
+        print("   Or use --list-runs to see available runs")
+        return
+    
+    # Initialize experiment manager for this run
+    try:
+        exp_manager = ExperimentManager(config.experiments_root, config.run_id)
+    except Exception as e:
+        print(f"❌ Error initializing experiment manager: {e}")
+        return
+    
+    # List checkpoints in this run if requested
     if config.list_checkpoints:
-        list_checkpoints(checkpoint_dir)
+        print(f"\n📂 Checkpoints in run '{config.run_id}':")
+        print("=" * 60)
+        checkpoints = exp_manager.list_checkpoints()
+        if not checkpoints:
+            print("❌ No checkpoints found in this run")
+        else:
+            for step in checkpoints:
+                print(f"  Step {step:5d}")
+        print("=" * 60 + "\n")
         return
     
     # Determine which checkpoint to analyze
-    if config.checkpoint_path is not None:
-        checkpoint_path = Path(config.checkpoint_path)
-    elif config.latest:
-        print(f"🔍 Finding latest checkpoint in {checkpoint_dir}...")
-        checkpoint_path = find_latest_checkpoint(checkpoint_dir)
-        print(f"📂 Using checkpoint: {checkpoint_path}")
-    else:
-        print("❌ Error: Must specify either --checkpoint-path or --latest")
-        print("   Or use --list-checkpoints to see available checkpoints")
+    available_steps = exp_manager.list_checkpoints()
+    
+    if not available_steps:
+        print(f"❌ No checkpoints found in run: {config.run_id}")
         return
+    
+    if config.step is not None:
+        if config.step not in available_steps:
+            print(f"❌ Step {config.step} not found in run")
+            print(f"   Available steps: {available_steps}")
+            return
+        checkpoint_step = config.step
+    else:
+        checkpoint_step = available_steps[-1]
+    
+    checkpoint_path = exp_manager.get_checkpoint_path(checkpoint_step)
     
     # Load checkpoint data
     print("\n" + "=" * 60)
     print("CHECKPOINT ANALYSIS")
     print("=" * 60)
-    print(f"Checkpoint: {checkpoint_path}")
+    print(f"Run ID: {config.run_id}")
+    print(f"Checkpoint path: {checkpoint_path}")
     
     try:
         training_stats, step, checkpoint_config = load_checkpoint_stats(checkpoint_path)
@@ -205,9 +262,8 @@ def main():
     # Print training summary
     print_training_summary(training_stats, algorithm_name=config.algorithm_name)
     
-    # Create and save plots
-    plot_path = Path(config.plot_path)
-    plot_path.parent.mkdir(parents=True, exist_ok=True)
+    # Create and save plots in the run's plots directory
+    plot_path = exp_manager.get_plot_path(config.algorithm_name)
     
     save_training_plots(
         training_stats, 

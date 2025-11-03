@@ -210,3 +210,4 @@ __marimo__/
 checkpoints/
 rollout_data/
 analysis_plots/
+experiments/
