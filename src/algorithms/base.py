@@ -4,6 +4,8 @@ from pathlib import Path
 import pickle
 from brax import envs
 from flax import nnx
+import jax
+import jax.numpy as jnp
 
 
 class RLAlgorithm(nnx.Module, ABC):
@@ -17,7 +19,17 @@ class RLAlgorithm(nnx.Module, ABC):
         self.env = envs.get_environment(config.env_name)
         self.action_dim = self.env.action_size
         self.obs_dim = self.env.observation_size
-        
+
+        # Generate num_rollouts initial states from the single environment
+        key = jax.random.PRNGKey(self.config.seed)
+        reset_keys = jax.random.split(key, self.config.num_rollouts)
+
+        initial_states = [self.env.reset(k) for k in reset_keys]
+        initial_states_stacked = jax.tree_util.tree_map(
+            lambda *xs: jnp.stack(xs), *initial_states
+        )  # Merge initial states into a single PyTree with leading batch dim
+        self.initial_states = nnx.data(initial_states_stacked)  # Store as NNX data to avoid being treated as parameters
+
         # Initialize network (algorithm-specific)
         self._init_network()
     

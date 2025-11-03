@@ -143,11 +143,11 @@ def list_checkpoints(checkpoint_dir: Path):
 @dataclass
 class AnalysisConfig:
     checkpoint_path: Optional[str] = None  # Specific checkpoint file to analyze
-    checkpoint_dir: str = 'checkpoints'  # Directory containing checkpoints
+    checkpoint_dir: str = 'checkpoints/ppo'  # Directory containing checkpoints
     latest: bool = True  # Use the latest checkpoint in the directory
     list_checkpoints: bool = False  # List all available checkpoints
-    plot_path: str = 'analysis_plots/checkpoint_analysis.png'  # Where to save plots
-    algorithm_name: str = 'REINFORCE'  # Name of the algorithm for plot titles
+    plot_path: str = 'analysis_plots/checkpoint_analysis_ppo.png'  # Where to save plots
+    algorithm_name: str = 'ppo'  # Name of the algorithm for plot titles
 
 
 def main():

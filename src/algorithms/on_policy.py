@@ -1,9 +1,11 @@
 import jax
 import jax.numpy as jnp
 from tqdm import tqdm
+from flax import nnx
+
 
 from .base import RLAlgorithm
-from ..utils import vectorized_rollouts, compute_returns, tree_norm
+from ..utils import vectorized_rollouts_multi_env, compute_returns, tree_norm
 
 
 class OnPolicyAlgorithm(RLAlgorithm):
@@ -21,17 +23,26 @@ class OnPolicyAlgorithm(RLAlgorithm):
             raise ValueError("Network must be initialized before collecting rollouts.")
 
         # Implement rollout collection logic
-        trajectories, key = vectorized_rollouts(
+        last_states, trajectories, key = vectorized_rollouts_multi_env(
             env=self.env,
             model=self.network,
             key=key,
             num_rollouts=self.config.num_rollouts,
             episode_length=self.config.episode_length,
             deterministic=self.config.deterministic,
+            initial_states=self.initial_states,
         )
 
+        # Update initial states for next call
+        self.initial_states = nnx.data(last_states)
+
+        final_values = None
+        if hasattr(self.network, 'critic') and self.config.use_bootstrap_for_final_states:
+            final_values = self.network.critic(trajectories['next_obs'][:,-1])
+            final_values *= (1 - trajectories['done'][:,-1])
+
         _, returns = compute_returns(
-            trajectories, gamma=self.config.gamma,
+            trajectories, gamma=self.config.gamma, init_returns=final_values,
         )
 
         return trajectories, returns, key
@@ -69,14 +80,16 @@ class OnPolicyAlgorithm(RLAlgorithm):
 
             step_losses = []
             step_grad_norms = []
+            info = {}
             
             # Perform updates for this step
             for update_ in range(self.config.num_updates_per_step):
                 # Call the algorithm-specific update method
-                loss, grads = self.update(
+                loss, grads, info = self.update(
                     trajectories['obs'],
                     trajectories['action'],
                     returns,
+                    info,
                 )
                 step_losses.append(loss)
 

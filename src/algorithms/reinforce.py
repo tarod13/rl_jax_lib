@@ -43,8 +43,8 @@ class REINFORCE(OnPolicyAlgorithm):
         return policy_loss
     
     @nnx.jit
-    def update(self, obs, actions, returns):
+    def update(self, obs, actions, returns, info={}):
         loss_fn = lambda model: self.loss(model, obs, actions, returns)
         loss, grads = nnx.value_and_grad(loss_fn)(self.network)
         self.optimizer.update(self.network, grads)
-        return loss, grads
+        return loss, grads, {}

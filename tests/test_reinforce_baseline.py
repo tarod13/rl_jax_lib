@@ -40,13 +40,13 @@ class Config:
     gamma: float = 0.99
     
     # Checkpointing
-    checkpoint_dir: str = 'checkpoints'
+    checkpoint_dir: str = 'checkpoints/reinforce-baseline'
     checkpoint_interval: int = 5  # Save every N steps
     resume_from: str | None = None  # 'checkpoint_step_20.pkl'  # Path to checkpoint to resume from
     keep_only_latest: bool = True  # Only keep the most recent checkpoint
     
     # Plotting
-    plot_path: str = 'analysis_plots/training_plots.png'
+    plot_path: str = 'analysis_plots/training_plots_reinforce_baseline.png'
 
 
 if __name__ == "__main__":

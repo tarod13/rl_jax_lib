@@ -1,4 +1,4 @@
-# rl_lib/algorithms/reinforce_baseline.py
+# rl_lib/algorithms/reinforce_baseline_is.py
 import jax
 import jax.numpy as jnp
 from flax import nnx
@@ -8,9 +8,9 @@ from .on_policy import OnPolicyAlgorithm
 from ..networks import SeparateActorStateCriticNetwork
 
 
-class REINFORCEwithBaseline(OnPolicyAlgorithm):
+class REINFORCEwithBaselineIS(OnPolicyAlgorithm):
     def _init_network(self):
-        """Initialize the policy network for REINFORCE with baseline."""
+        """Initialize the policy network for REINFORCE with baseline and importance sampling."""
 
         # Initialize network
         rngs = nnx.Rngs(self.config.seed)
@@ -38,18 +38,24 @@ class REINFORCEwithBaseline(OnPolicyAlgorithm):
         log_prob = log_probs.sum(axis=-1)
         return log_prob
     
-    def loss(self, model, obs, actions, returns):
+    def loss(self, model, obs, actions, returns, old_log_probs):
         action_log_probs = self.get_log_prob(model, obs, actions).clip(-10.0, 2.0)
+        likelihood_ratios = jnp.exp((action_log_probs - old_log_probs).clip(-10.0, 2.0))
         predicted_values = model.critic(obs)
         differences = returns - predicted_values
         
-        policy_loss = -jnp.mean(action_log_probs * jax.lax.stop_gradient(differences))
+        policy_loss = -jnp.mean(likelihood_ratios * jax.lax.stop_gradient(differences))
         value_loss = jnp.mean(differences ** 2)
         return policy_loss + value_loss
 
     @nnx.jit
     def update(self, obs, actions, returns, info={}):
-        loss_fn = lambda model: self.loss(model, obs, actions, returns)
+        # Get initial action (log-)likelihoods
+        if not 'old_log_probs' in info:
+            info['old_log_probs'] = self.get_log_prob(self.network, obs, actions).clip(-10.0, 2.0)
+        old_log_probs = info['old_log_probs']
+
+        loss_fn = lambda model: self.loss(model, obs, actions, returns, old_log_probs)
         loss, grads = nnx.value_and_grad(loss_fn)(self.network)
         self.optimizer.update(self.network, grads)
-        return loss, grads, {}
+        return loss, grads, info

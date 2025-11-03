@@ -3,51 +3,32 @@ import jax
 import jax.numpy as jnp
 from flax import nnx
 import optax
-from brax import envs
 
-from .base import OnPolicyAlgorithm
-from ..networks import ActorCriticNetwork
-from ..utils import vectorized_rollouts, rollout_statistics
+from .on_policy import OnPolicyAlgorithm
+from ..networks import SeparateActorStateCriticNetwork
 
 
 class PPO(OnPolicyAlgorithm):
-    def __init__(
-            self, 
-            config_param: dict,
-        ):
-        # Initialize environment
-        self.env = envs.get_environment(config_param['env_name'])
-        self.action_dim = self.env.action_size
-        self.obs_dim = self.env.observation_size
-        self.limits = getattr(self.env.sys, 'actuator_ctrlrange', None)
+    def _init_network(self):
+        """Initialize the policy network for PPO."""
 
         # Initialize network
-        rngs = nnx.Rngs(config_param['seed'])
-        self.network = ActorCriticNetwork(
+        rngs = nnx.Rngs(self.config.seed)
+        limits = getattr(self.env.sys, 'actuator_ctrlrange', None)
+        self.network = SeparateActorStateCriticNetwork(
             obs_dim=self.obs_dim,
             action_dim=self.action_dim,
-            hidden_dim=config_param['hidden_dim'],
-            limits=self.limits,
+            hidden_dim=self.config.hidden_dim,
+            limits=limits,
             rngs=rngs,
         )
 
         # Initialize optimizer
         self.optimizer = nnx.Optimizer(
-            self.network, optax.adam(config_param['lr']))
-        
-        # Save config
-        self.config = config_param
+            self.network, optax.adam(self.config.lr), wrt=nnx.Param)
 
-    def extract_info_from_trajectories(self, trajectories):
-        obs = trajectories['obs']
-        actions = trajectories['actions']
-        rewards = trajectories['rewards']
-        dones = trajectories['dones']
-        return obs, actions, rewards, dones
-
-    @nnx.jit
-    def get_log_prob_and_value(self, obs, action, key):
-        mean_action, logstd_action, value = self.network(obs)
+    def get_log_prob(self, model, obs, action):
+        mean_action, logstd_action = model.actor(obs)
         log_probs_gaussian = -0.5 * (
             ((action - mean_action) / (jnp.exp(logstd_action) + 1e-8)) ** 2 
             + 2 * logstd_action 
@@ -55,62 +36,28 @@ class PPO(OnPolicyAlgorithm):
         )
         log_probs = log_probs_gaussian - jnp.log((1 - jnp.tanh(action) ** 2).clip(1e-8))
         log_prob = log_probs.sum(axis=-1)
-        return log_prob, value
+        return log_prob
     
-    @nnx.jit  
-    def ppo_loss(self, obs, actions, old_log_probs, advantages, returns):
-        new_log_probs, values = self.network(obs)
-
-        # Policy loss
-        ratio = jnp.exp(new_log_probs - old_log_probs)
-        clipped_ratio = jnp.clip(
-            ratio, 
-            min=self.config['min_ratio'], 
-            max=self.config['max_ratio'],
-        )
+    def loss(self, model, obs, actions, returns, old_log_probs):
+        action_log_probs = self.get_log_prob(model, obs, actions).clip(-10.0, 2.0)
+        likelihood_ratios = jnp.exp((action_log_probs - old_log_probs))
+        clipped_ratios = likelihood_ratios.clip(1-self.config.epsilon, 1+self.config.epsilon)
+        pessimistic_ratios = jnp.minimum(likelihood_ratios, clipped_ratios)
+        predicted_values = model.critic(obs)
+        differences = returns - predicted_values
         
-        policy_loss = -jnp.mean(jnp.minimum(
-            ratio * advantages,
-            clipped_ratio * advantages
-        ))
-        
-        # Value loss  
-        value_loss = jnp.mean((values - returns) ** 2)
+        policy_loss = -jnp.mean(pessimistic_ratios * jax.lax.stop_gradient(differences))
+        value_loss = jnp.mean(differences ** 2)
+        return policy_loss + value_loss
 
-        total_loss = policy_loss + self.config['value_loss_coef'] * value_loss
-        return total_loss
-    
     @nnx.jit
-    def update(self, obs, actions, old_log_probs, advantages, returns):
-        loss, grads = nnx.value_and_grad(self.ppo_loss)(
-            obs, actions, old_log_probs, advantages, returns
-        )
-        self.optimizer.update(grads)
-        return loss
+    def update(self, obs, actions, returns, info={}):
+        # Get initial action (log-)likelihoods
+        if not 'old_log_probs' in info:
+            info['old_log_probs'] = self.get_log_prob(self.network, obs, actions).clip(-10.0, 2.0)
+        old_log_probs = info['old_log_probs']
 
-    def collect_rollouts(self):
-        # Implement rollout collection logic
-        trajectories = vectorized_rollouts(
-            env=self.env,
-            model=self.network,
-            num_rollouts=self.config['num_rollouts'],
-            episode_length=self.config['episode_length'],
-            deterministic=self.config['deterministic'],
-            seed=self.config['seed'],  # TODO: Sample new seed each time
-        )
-
-        rollout_stats = rollout_statistics(
-            trajectories, gamma=1.0,
-        )
-
-        return trajectories, rollout_stats
-
-    def train(self, env_state, key):
-        # Implement training loop logic
-        for training_step in range(self.config['num_training_steps']):
-            # Collect rollouts
-            trajectories, rollout_stats = self.collect_rollouts(env_state, key)
-            
-            # Further training logic goes here
-
-        pass
+        loss_fn = lambda model: self.loss(model, obs, actions, returns, old_log_probs)
+        loss, grads = nnx.value_and_grad(loss_fn)(self.network)
+        self.optimizer.update(self.network, grads)
+        return loss, grads, info

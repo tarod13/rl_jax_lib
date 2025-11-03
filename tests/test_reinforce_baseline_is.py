@@ -1,5 +1,5 @@
 try:
-    from src.algorithms.reinforce import REINFORCE
+    from src.algorithms.reinforce_baseline_is import REINFORCEwithBaselineIS
     from src.utils import (
         print_training_summary,
         save_training_plots
@@ -14,7 +14,7 @@ except:
     if REPO_ROOT not in sys.path:
         sys.path.insert(0, str(REPO_ROOT))
     
-    from src.algorithms.reinforce import REINFORCE
+    from src.algorithms.reinforce_baseline_is import REINFORCEwithBaselineIS
     from src.utils import (
         print_training_summary,
         save_training_plots
@@ -38,16 +38,16 @@ class Config:
     num_training_steps: int = 10
     num_updates_per_step: int = 5
     gamma: float = 0.99
-    use_bootstrap_for_final_states: bool = False
+    use_bootstrap_for_final_states: bool = True
     
     # Checkpointing
-    checkpoint_dir: str = 'checkpoints/reinforce'
+    checkpoint_dir: str = 'checkpoints/reinforce-baseline-is'
     checkpoint_interval: int = 5  # Save every N steps
     resume_from: str | None = None  # 'checkpoint_step_20.pkl'  # Path to checkpoint to resume from
     keep_only_latest: bool = True  # Only keep the most recent checkpoint
     
     # Plotting
-    plot_path: str = 'analysis_plots/training_plots_reinforce.png'
+    plot_path: str = 'analysis_plots/training_plots_reinforce_baseline_is.png'
 
 
 if __name__ == "__main__":
@@ -58,21 +58,21 @@ if __name__ == "__main__":
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
     
     print("="*60)
-    print("REINFORCE Training")
+    print("REINFORCE with baseline and importance sampling training")
     print("="*60)
     
     # Resume from checkpoint if specified
     if config.resume_from is not None:
         checkpoint_path = checkpoint_dir / config.resume_from
-        print(f"Resuming from checkpoint: {checkpoint_path}")        
-        agent, training_stats, start_step = REINFORCE.load_checkpoint(checkpoint_path)
+        print(f"Resuming from checkpoint: {checkpoint_path}")
+        agent, training_stats, start_step = REINFORCEwithBaselineIS.load_checkpoint(checkpoint_path)
         # Update config with potentially new values
         agent.config.num_training_steps = config.num_training_steps
         agent.config.num_updates_per_step = config.num_updates_per_step
         start_step += 1  # Start from next step
     else:
         print("Starting new training")
-        agent = REINFORCE(config)
+        agent = REINFORCEwithBaselineIS(config)
         training_stats = {
             'loss_history': [],
             'grad_norm_history': [],
@@ -124,7 +124,7 @@ if __name__ == "__main__":
     agent.save_checkpoint(checkpoint_dir, config.num_training_steps, training_stats, keep_only_latest=config.keep_only_latest)
     
     # Print summary using utility function
-    print_training_summary(training_stats, algorithm_name="REINFORCE")
+    print_training_summary(training_stats, algorithm_name="REINFORCEwithBaselineIS")
     
     # Create and save plot using utility function
-    save_training_plots(training_stats, config.plot_path, algorithm_name="REINFORCE")
+    save_training_plots(training_stats, config.plot_path, algorithm_name="REINFORCEwithBaselineIS")
