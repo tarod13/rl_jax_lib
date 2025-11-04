@@ -52,7 +52,7 @@ class ActorNetwork(nnx.Module):
         return action, epsilon, mean_action, logstd_action
 
     def get_deterministic_action(self, x):
-        mean_action, _, _ = self(x)
+        mean_action, _ = self(x)
         action = nnx.tanh(mean_action)
         action = self.scale_action(action)
         return action

@@ -5,7 +5,10 @@ from flax import nnx
 
 
 from .base import RLAlgorithm
-from ..utils import vectorized_rollouts_multi_env, compute_returns, tree_norm
+from ..utils import (
+    vectorized_rollouts_multi_env, compute_returns, tree_norm, 
+    evaluate_agent, print_evaluation_summary,
+)
 
 
 class OnPolicyAlgorithm(RLAlgorithm):
@@ -47,7 +50,8 @@ class OnPolicyAlgorithm(RLAlgorithm):
 
         return trajectories, returns, key
 
-    def train(self, key, num_steps=None, checkpoint_interval=0, keep_only_latest=True):
+    def train(self, key, num_steps=None, checkpoint_interval=0, keep_only_latest=True, 
+              num_eval_episodes=10, max_eval_length=1000, run_eval_on_checkpoint=True):
         """
         Train the on-policy agent.
         
@@ -56,9 +60,12 @@ class OnPolicyAlgorithm(RLAlgorithm):
             num_steps: Number of training steps (if None, uses config)
             checkpoint_interval: Save checkpoint every N steps (0 = no checkpoints)
             keep_only_latest: If True, only keep the most recent checkpoint (default: True)
+            num_eval_episodes: Number of episodes for evaluation (default: 10)
+            max_eval_length: Maximum episode length for evaluation (default: 1000)
+            run_eval_on_checkpoint: If True, run evaluation before saving checkpoints (default: True)
             
         Returns:
-            training_stats: Dictionary with 'loss_history', 'grad_norm_history', and 'return_history'
+            training_stats: Dictionary with 'loss_history', 'grad_norm_history', 'return_history', and 'eval_history'
         """
         if key is None:
             key = jax.random.PRNGKey(self.config.seed)
@@ -69,6 +76,7 @@ class OnPolicyAlgorithm(RLAlgorithm):
         return_history = []
         loss_history = []
         grad_norm_history = []
+        eval_history = []  # Track evaluation metrics
 
         # Training loop
         for training_step in tqdm(range(num_steps), desc="Training Steps", leave=True):
@@ -117,11 +125,27 @@ class OnPolicyAlgorithm(RLAlgorithm):
 
             # Save checkpoint if requested
             if checkpoint_interval > 0 and actual_step % checkpoint_interval == 0:
+                # Run evaluation before saving checkpoint
+                if run_eval_on_checkpoint:
+                    key, eval_key = jax.random.split(key)
+                    eval_stats = evaluate_agent(
+                        agent=self,
+                        key=eval_key,
+                        num_eval_episodes=num_eval_episodes,
+                        max_episode_length=max_eval_length,
+                    )
+                    eval_history.append({
+                        'step': actual_step,
+                        'stats': eval_stats,
+                    })
+                    print_evaluation_summary(eval_stats, step=actual_step)
+                
                 if self.experiment_manager is not None:
                     checkpoint_stats = {
                         'return_history': jnp.array(return_history),
                         'loss_history': jnp.array(loss_history),
                         'grad_norm_history': jnp.array(grad_norm_history),
+                        'eval_history': eval_history,
                     }
                     self.save_checkpoint(
                         actual_step,
@@ -133,5 +157,6 @@ class OnPolicyAlgorithm(RLAlgorithm):
             'return_history': jnp.array(return_history),
             'loss_history': jnp.array(loss_history),
             'grad_norm_history': jnp.array(grad_norm_history),
+            'eval_history': eval_history,
         }
         return training_stats

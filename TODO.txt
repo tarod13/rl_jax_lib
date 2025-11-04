@@ -1,0 +1,12 @@
+- Go through PPO list
+    - Handle truncation signal
+- Unify tests
+- Add required experiment description in config
+- Separate experiment and algorithm configs
+- Unify scripts
+- Add proper evaluation
+- Add alternative metrics (runtime, gradient steps, samples, parameters)
+- Add comparison plot for list of experiment IDs
+- Add Q-learning (+ off-policy)
+- Add SAC
+- Add TD3

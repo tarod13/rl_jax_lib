@@ -37,7 +37,7 @@ class Config:
     seed: int = 42
     hidden_dim: int = 32
     env_name: str = 'ant'
-    lr: float = 1e-5
+    lr: float = 1e-4
     num_training_steps: int = 10
     num_updates_per_step: int = 5
     gamma: float = 0.99
@@ -49,6 +49,11 @@ class Config:
     run_id: str | None = None  # Auto-generated if None
     checkpoint_interval: int = 5  # Save every N steps
     keep_only_latest: bool = True  # Only keep the most recent checkpoint
+    
+    # Evaluation settings
+    num_eval_episodes: int = 100  # Number of episodes for evaluation
+    max_eval_length: int = 10000  # Maximum episode length for evaluation
+    run_eval_on_checkpoint: bool = True  # Run evaluation before saving checkpoints
     
     # Resume training
     resume_run_id: str | None = None  # Run ID to resume from
@@ -119,6 +124,7 @@ if __name__ == "__main__":
                 'loss_history': [],
                 'grad_norm_history': [],
                 'return_history': [],
+                'eval_history': [],
             }
             start_step = 0
     else:
@@ -128,6 +134,7 @@ if __name__ == "__main__":
             'loss_history': [],
             'grad_norm_history': [],
             'return_history': [],
+            'eval_history': [],
         }
         start_step = 0
         
@@ -145,14 +152,19 @@ if __name__ == "__main__":
     print(f"Hidden dim: {agent.config.hidden_dim}")
     print(f"Seed: {agent.config.seed}")
     print(f"Checkpoint interval: {config.checkpoint_interval}")
+    print(f"Evaluation episodes: {config.num_eval_episodes}")
+    print(f"Run eval on checkpoint: {config.run_eval_on_checkpoint}")
     print("="*60 + "\n")
     
-    # Train the agent with checkpointing
+    # Train the agent with checkpointing and evaluation
     training_stats_new = agent.train(
         key=None,
         num_steps=config.num_training_steps - start_step,
         checkpoint_interval=config.checkpoint_interval,
         keep_only_latest=config.keep_only_latest,
+        num_eval_episodes=config.num_eval_episodes,
+        max_eval_length=config.max_eval_length,
+        run_eval_on_checkpoint=config.run_eval_on_checkpoint,
     )
     
     # Merge with existing stats if resuming
@@ -172,6 +184,9 @@ if __name__ == "__main__":
                 training_stats['return_history'],
                 training_stats_new['return_history']
             ], axis=0)
+        # Merge eval_history (it's a list of dicts, not a JAX array)
+        if 'eval_history' in training_stats_new:
+            training_stats['eval_history'] = training_stats.get('eval_history', []) + training_stats_new['eval_history']
     else:
         training_stats = training_stats_new
     
@@ -192,3 +207,14 @@ if __name__ == "__main__":
     print(f"\n✅ Training complete!")
     print(f"Run ID: {exp_manager.run_id}")
     print(f"Results saved to: {exp_manager.run_dir}")
+    
+    # Print evaluation summary if we have eval data
+    if training_stats.get('eval_history'):
+        print("\n" + "="*60)
+        print("EVALUATION HISTORY SUMMARY")
+        print("="*60)
+        for eval_data in training_stats['eval_history']:
+            step = eval_data['step']
+            stats = eval_data['stats']
+            print(f"Step {step:3d}: Mean Return = {stats['mean_return']:8.2f} ± {stats['std_return']:6.2f}")
+        print("="*60)

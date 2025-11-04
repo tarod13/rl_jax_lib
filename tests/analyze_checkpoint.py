@@ -24,6 +24,7 @@ try:
         print_training_summary,
         save_training_plots,
         ExperimentManager,
+        plot_eval_progress,
     )
 except:
     from pathlib import Path
@@ -39,6 +40,7 @@ except:
         print_training_summary,
         save_training_plots,
         ExperimentManager,
+        plot_eval_progress,
     )
 
 from dataclasses import dataclass
@@ -270,6 +272,16 @@ def main():
         str(plot_path), 
         algorithm_name=f"{config.algorithm_name} (Step {step})"
     )
+    
+    # If we have evaluation data, also create a focused evaluation plot
+    if 'eval_history' in training_stats and training_stats['eval_history']:
+        eval_plot_path = exp_manager.plots_dir / f"eval_progress_{config.algorithm_name.lower()}.png"
+        
+        plot_eval_progress(
+            training_stats,
+            str(eval_plot_path),
+            algorithm_name=f"{config.algorithm_name} (Step {step})"
+        )
     
     print(f"\n✅ Analysis complete! Plots saved to: {plot_path}")
 
