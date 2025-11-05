@@ -28,19 +28,20 @@ class PPO(OnPolicyAlgorithm):
             self.network, optax.adam(self.config.lr), wrt=nnx.Param)
 
     def get_log_prob(self, model, obs, action):
+        pre_tanh_action = jnp.arctanh(jnp.clip(action, -0.999, 0.999))  # Invert tanh
         mean_action, logstd_action = model.actor(obs)
         log_probs_gaussian = -0.5 * (
-            ((action - mean_action) / (jnp.exp(logstd_action) + 1e-8)) ** 2 
-            + 2 * logstd_action 
+            ((pre_tanh_action - mean_action) / (jnp.exp(logstd_action) + 1e-8)) ** 2
+            + 2 * logstd_action
             + jnp.log(2 * jnp.pi)
         )
-        log_probs = log_probs_gaussian - jnp.log((1 - jnp.tanh(action) ** 2).clip(1e-8))
+        log_probs = log_probs_gaussian - jnp.log((1 - action ** 2).clip(1e-8))
         log_prob = log_probs.sum(axis=-1)
         return log_prob
     
     def loss(self, model, obs, actions, returns, old_log_probs):
-        action_log_probs = self.get_log_prob(model, obs, actions).clip(-10.0, 2.0)
-        likelihood_ratios = jnp.exp((action_log_probs - old_log_probs))
+        action_log_probs = self.get_log_prob(model, obs, actions)
+        likelihood_ratios = jnp.exp(action_log_probs - old_log_probs)
         clipped_ratios = likelihood_ratios.clip(1-self.config.epsilon, 1+self.config.epsilon)
         pessimistic_ratios = jnp.minimum(likelihood_ratios, clipped_ratios)
         predicted_values = model.critic(obs)
@@ -54,7 +55,7 @@ class PPO(OnPolicyAlgorithm):
     def update(self, obs, actions, returns, info={}):
         # Get initial action (log-)likelihoods
         if not 'old_log_probs' in info:
-            info['old_log_probs'] = self.get_log_prob(self.network, obs, actions).clip(-10.0, 2.0)
+            info['old_log_probs'] = self.get_log_prob(self.network, obs, actions)
         old_log_probs = info['old_log_probs']
 
         loss_fn = lambda model: self.loss(model, obs, actions, returns, old_log_probs)
