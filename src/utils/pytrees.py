@@ -1,5 +1,6 @@
 import jax
 import jax.numpy as jnp
+from flax import nnx
 
 
 def tree_norm(pytree):
@@ -17,3 +18,26 @@ def clip_grads(grads, max_norm):
     clipped_grads = jax.tree_util.tree_map(lambda g: g * scale, grads)
     
     return clipped_grads
+
+def polyak_update(target_model: nnx.Module, online_model: nnx.Module, tau: float):
+    """
+    Polyak averaging update of target network.
+    
+    Args:
+        target_model: Target network to update
+        online_model: Online network to copy from
+        tau: Polyak coefficient (target = tau * online + (1-tau) * target)
+    """
+    # Get parameter state and rest (including Variables like eigenvectors)
+    target_graph, target_state, target_rest = nnx.split(target_model, nnx.Param, ...)
+    _, online_state, _ = nnx.split(online_model, nnx.Param, ...)
+    
+    # Perform Polyak averaging on the trainable parameters only
+    updated_state = jax.tree.map(
+        lambda t, o: tau * o + (1 - tau) * t,
+        target_state,
+        online_state
+    )
+    
+    # Merge back into target model (parameters updated, rest unchanged)
+    nnx.update(target_model, updated_state, target_rest)

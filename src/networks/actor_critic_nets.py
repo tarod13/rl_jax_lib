@@ -1,12 +1,13 @@
+import jax
 import jax.numpy as jnp
 from flax import nnx
 
 
-from .policy_nets import ActorNetwork
-from .value_nets import StateValueNetwork
+from .policy_nets import StochasticActorNetwork, ActorNetwork
+from .value_nets import StateValueNetwork, ValueNetwork
 
 
-class ActorCriticNetwork(ActorNetwork):
+class ActorCriticNetwork(StochasticActorNetwork):
     def __init__(
             self,
             obs_dim: int, 
@@ -37,7 +38,7 @@ class ActorCriticNetwork(ActorNetwork):
         return mean_action, logstd_action, value
     
 
-class SeparateActorStateCriticNetwork(nnx.Module):
+class SSActorStateCriticNetwork(nnx.Module):
     def __init__(
             self,
             obs_dim: int, 
@@ -48,7 +49,7 @@ class SeparateActorStateCriticNetwork(nnx.Module):
             nl: str = 'relu',
             use_layernorm: bool = False,
         ):
-        self.actor = ActorNetwork(
+        self.actor = StochasticActorNetwork(
             obs_dim=obs_dim,
             action_dim=action_dim,
             hidden_dim=hidden_dim,
@@ -69,6 +70,62 @@ class SeparateActorStateCriticNetwork(nnx.Module):
         mean_action, logstd_action = self.actor(x)
         value = jnp.squeeze(self.critic(x), axis=-1)
         return mean_action, logstd_action, value
+    
+    def sample_action(self, x, key):
+        return self.actor.sample_action(x, key)
+    
+    def get_deterministic_action(self, x):
+        return self.actor.get_deterministic_action(x)
+
+
+class SeparateActorDualCriticNetwork(nnx.Module):
+    def __init__(
+            self,
+            obs_dim: int, 
+            action_dim: int, 
+            hidden_dim: int = 256,
+            limits: jnp.ndarray = None,
+            rngs: nnx.Rngs = None,
+            nl: str = 'relu',
+            use_layernorm: bool = False,
+            sigma: float = 0.1,
+        ):
+        self.actor = ActorNetwork(
+            obs_dim=obs_dim,
+            action_dim=action_dim,
+            hidden_dim=hidden_dim,
+            limits=limits,
+            rngs=rngs,
+            nl=nl,
+            use_layernorm=use_layernorm,
+            sigma=sigma,
+        )
+        self.critic_1 = ValueNetwork(
+            obs_dim=obs_dim,
+            action_dim=action_dim,
+            hidden_dim=hidden_dim,
+            rngs=rngs,
+            nl=nl,
+            use_layernorm=use_layernorm,
+        )
+        self.critic_2 = ValueNetwork(
+            obs_dim=obs_dim,
+            action_dim=action_dim,
+            hidden_dim=hidden_dim,
+            rngs=rngs,
+            nl=nl,
+            use_layernorm=use_layernorm,
+        )
+
+    def __call__(self, x):
+        action = self.get_deterministic_action(x)
+        value = jnp.squeeze(self.critic_1(x, action), axis=-1)
+        return action, value
+
+    def get_values(self, x, action):
+        value_1 = jnp.squeeze(self.critic_1(x, action), axis=-1)
+        value_2 = jnp.squeeze(self.critic_2(x, action), axis=-1)
+        return value_1, value_2
     
     def sample_action(self, x, key):
         return self.actor.sample_action(x, key)

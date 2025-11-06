@@ -62,11 +62,13 @@ class ValueNetwork(nnx.Module):
             action_dim: int, 
             hidden_dim: int = 256,
             rngs: nnx.Rngs = None,
+            nl: str = 'relu',
             use_layernorm: bool = False,
         ):
         self.action_dim = action_dim
         self.hidden_dim = hidden_dim
         self.rngs = rngs
+        self.nl = nl
         self.use_layernorm = use_layernorm
 
         self.dense1 = nnx.Linear(obs_dim + action_dim, hidden_dim, rngs=rngs)
@@ -84,12 +86,22 @@ class ValueNetwork(nnx.Module):
         x = self.dense1(x)
         if self.use_layernorm:
             x = self.ln1(x)
-        x = nnx.relu(x)
-        
+        if self.nl == 'relu':
+            x = nnx.relu(x)
+        elif self.nl == 'tanh':
+            x = nnx.tanh(x)
+        else:
+            raise ValueError(f"Unsupported non-linearity: {self.nl}")
+
         x = self.dense2(x)
         if self.use_layernorm:
             x = self.ln2(x)
-        x = nnx.relu(x)
+        if self.nl == 'relu':
+            x = nnx.relu(x)
+        elif self.nl == 'tanh':
+            x = nnx.tanh(x)
+        else:
+            raise ValueError(f"Unsupported non-linearity: {self.nl}")
 
         # Get value
         value = self.value_head(x)
