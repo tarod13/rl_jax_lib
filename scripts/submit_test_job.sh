@@ -30,7 +30,7 @@ export XLA_PYTHON_CLIENT_PREALLOCATE=false
 # Run training
 python tests/test.py \
     --seed $SEED \
-    --algorithm ppo \
+    --algorithm PPO \
     --num_training_steps 1000 \
     --checkpoint_interval 50 \
     --num_epochs 10 \

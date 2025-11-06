@@ -35,18 +35,18 @@ from src.config import (
 
 # Map algorithm names to their classes
 ALGORITHM_MAP = {
-    'PPO': PPO,
-    'REINFORCE': REINFORCE,
-    'REINFORCEwithBaseline': REINFORCEwithBaseline,
-    'REINFORCEwithBaselineIS': REINFORCEwithBaselineIS,
+    'ppo': PPO,
+    'reinforce': REINFORCE,
+    'reinforcewithbaseline': REINFORCEwithBaseline,
+    'reinforcewithbaselineis': REINFORCEwithBaselineIS,
 }
 
 # Map algorithm names to their config classes
 ALGORITHM_CONFIG_MAP = {
-    'PPO': PPOConfig,
-    'REINFORCE': OnPolicyConfig,
-    'REINFORCEwithBaseline': OnPolicyConfig,
-    'REINFORCEwithBaselineIS': OnPolicyConfig,
+    'ppo': PPOConfig,
+    'reinforce': OnPolicyConfig,
+    'reinforcewithbaseline': OnPolicyConfig,
+    'reinforcewithbaselineis': OnPolicyConfig,
 }
 
 
@@ -135,7 +135,9 @@ if __name__ == "__main__":
     exp_config = create_config_from_args(ExperimentConfig, args)
     
     # Determine algorithm
-    algorithm = get_algorithm_from_args_or_resume(args, exp_config.experiments_root)
+    algorithm = get_algorithm_from_args_or_resume(
+        args, exp_config.experiments_root)
+    algorithm = algorithm.lower()
     
     # Get algorithm config class
     AlgoConfigClass = ALGORITHM_CONFIG_MAP[algorithm]

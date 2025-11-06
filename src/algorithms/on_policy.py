@@ -10,8 +10,14 @@ from ..utils import (
     evaluate_agent, print_evaluation_summary,
 )
 
-ALGORITHMS_WITH_ADVANTAGE_ESTIMATION = ['PPO']
-ALGORITHMS_WITH_LOG_PROBS = ['PPO', 'REINFORCEwithBaseline', 'REINFORCEwithBaselineIS']
+ALGORITHMS_WITH_ADVANTAGE_ESTIMATION = [
+    'ppo',
+]
+ALGORITHMS_WITH_LOG_PROBS = [
+    'ppo',
+    'reinforcewithbaseline',
+    'reinforcewithbaselineis',
+]
 
 
 class OnPolicyAlgorithm(RLAlgorithm):
