@@ -1,12 +1,17 @@
-- Go through PPO list
-    - Handle truncation signal
-- Unify tests
-- Add required experiment description in config
-- Separate experiment and algorithm configs
-- Unify scripts
-- Add proper evaluation
-- Add alternative metrics (runtime, gradient steps, samples, parameters)
-- Add comparison plot for list of experiment IDs
-- Add Q-learning (+ off-policy)
-- Add SAC
-- Add TD3
+- TODO
+    - Handle truncation/terminated signals
+    - Go through PPO list
+        - Make initialization type explicit
+        - Consider reward scaling or clipping
+    - Separate experiment and algorithm configs
+    - Unify scripts
+    - Add alternative metrics (runtime, gradient steps, samples, parameters)
+
+    - Add Q-learning (+ off-policy)
+    - Add SAC
+    - Add TD3
+
+- TO EVALUATE:
+    - Test or fix comparison plot for list of experiment IDs
+    - Test REINFORCE versions and PPO in common environments
+

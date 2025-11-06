@@ -10,6 +10,9 @@ from ..utils import (
     evaluate_agent, print_evaluation_summary,
 )
 
+ALGORITHMS_WITH_ADVANTAGE_ESTIMATION = ['PPO']
+ALGORITHMS_WITH_LOG_PROBS = ['PPO', 'REINFORCEwithBaseline', 'REINFORCEwithBaselineIS']
+
 
 class OnPolicyAlgorithm(RLAlgorithm):
     """Base for on-policy algorithms (REINFORCE, PPO, TRPO)."""
@@ -39,16 +42,61 @@ class OnPolicyAlgorithm(RLAlgorithm):
         # Update initial states for next call
         self.initial_states = nnx.data(last_states)
 
-        final_values = None
-        if hasattr(self.network, 'critic') and self.config.use_bootstrap_for_final_states:
-            final_values = self.network.critic(trajectories['next_obs'][:,-1])
-            final_values *= (1 - trajectories['done'][:,-1])
+        # Compute final next values for return calculation initialization
+        if hasattr(self.network, 'critic'):
+            final_next_values = self.network.critic(trajectories['next_obs'][:,-1])
+            final_next_values *= (1 - trajectories['done'][:,-1])
+        else:
+            final_next_values = jnp.zeros((self.config.num_rollouts,))
 
-        _, returns = compute_returns(
-            trajectories, gamma=self.config.gamma, init_returns=final_values,
-        )
+        # Compute returns if needed
+        calculate_advantages = self.config.algorithm in ALGORITHMS_WITH_ADVANTAGE_ESTIMATION
+        use_gae = getattr(self.config, 'use_gae', False)  # Get use_gae flag from config
+        calculate_returns = not calculate_advantages or not use_gae
+        if calculate_returns:
+            _, returns = compute_returns(
+                    trajectories, gamma=self.config.gamma, init_returns=final_next_values,
+                )
+            advantages = None
+        else:
+            returns = None
 
-        return trajectories, returns, key
+        if calculate_advantages:
+            # Compute values for advantage estimation if needed
+            if not hasattr(self.network, 'critic'):
+                raise ValueError("Advantage estimation requires a critic network, but network has no critic.")
+
+            # Compute values for all timesteps
+            # Shape: [num_rollouts, episode_length]
+            N, T = trajectories['obs'].shape[:2]
+            values = self.network.critic(trajectories['obs'].reshape(N * T, -1))
+            values = values.reshape(N, T)
+
+            if use_gae:
+                gae_lambda = getattr(self.config, 'gae_lambda', 0.95)        
+                next_values = jnp.concatenate(
+                    [values[:,1:], final_next_values[:,None]], axis=1
+                )
+                
+                # Compute GAE advantages
+                _, advantages = compute_returns(
+                    trajectories, 
+                    gamma=self.config.gamma,
+                    use_gae=True,
+                    gae_lambda=gae_lambda,
+                    values=values,
+                    next_values=next_values,
+                )
+                
+                # For PPO and similar algorithms, we also need the value targets
+                # Value targets = advantages + values
+                returns = advantages + values
+                
+            else:
+                # Standard return computation
+                advantages = returns - values
+
+        return trajectories, returns, advantages, key
 
     def train(self, key, num_steps=None, checkpoint_interval=0, keep_only_latest=True, 
               num_eval_episodes=10, max_eval_length=1000, run_eval_on_checkpoint=True):
@@ -78,30 +126,101 @@ class OnPolicyAlgorithm(RLAlgorithm):
         grad_norm_history = []
         eval_history = []  # Track evaluation metrics
 
+        num_epochs = getattr(self.config, 'num_epochs', 1)
+
         # Training loop
         for training_step in tqdm(range(num_steps), desc="Training Steps", leave=True):
             # Collect rollouts
             key, step_key = jax.random.split(key)
-            trajectories, returns, _ = self.collect_rollouts(key=step_key)
+            trajectories, returns, advantages, _ = self.collect_rollouts(key=step_key)
 
             step_losses = []
             step_grad_norms = []
-            info = {}
             
-            # Perform updates for this step
-            for update_ in range(self.config.num_updates_per_step):
-                # Call the algorithm-specific update method
-                loss, grads, info = self.update(
-                    trajectories['obs'],
-                    trajectories['action'],
-                    returns,
-                    info,
-                )
-                step_losses.append(loss)
+            # Flatten trajectories from [N, T, ...] to [NT, ...]
+            N, T = trajectories['obs'].shape[:2]
+            total_samples = N * T
+            
+            flat_obs = trajectories['obs'].reshape(total_samples, -1)
+            flat_actions = trajectories['action'].reshape(total_samples, -1)
+            flat_returns = returns.reshape(total_samples)
+            if advantages is not None:
+                flat_advantages = advantages.reshape(total_samples)
+                normalize_advantages = getattr(self.config, 'normalize_advantages', False)
+                if normalize_advantages:
+                    flat_advantages = (flat_advantages - jnp.mean(flat_advantages)) / (jnp.std(flat_advantages) + 1e-8)
+            else:
+                flat_advantages = None
+            
+            # Set minibatch_size to full batch if None
+            minibatch_size = getattr(self.config, 'minibatch_size', None)
+            if minibatch_size is None:
+                minibatch_size = total_samples
+            
+            # Compute number of minibatches
+            num_minibatches = total_samples // minibatch_size
+            
+            # Compute old_log_probs in minibatches if needed
+            old_log_probs_all = None
+            need_old_log_probs = self.config.algorithm in ALGORITHMS_WITH_LOG_PROBS
+            if need_old_log_probs:
+                old_log_probs_list = []
+                
+                # Compute old_log_probs in minibatches
+                for mb_idx in range(num_minibatches):
+                    start_idx = mb_idx * minibatch_size
+                    end_idx = start_idx + minibatch_size
+                    
+                    mb_obs = flat_obs[start_idx:end_idx]
+                    mb_actions = flat_actions[start_idx:end_idx]
+                    
+                    # Compute log probs for this minibatch
+                    mb_old_log_probs = self.get_log_prob(self.network, mb_obs, mb_actions)
+                    old_log_probs_list.append(mb_old_log_probs)
+                
+                # Concatenate all minibatch log probs
+                old_log_probs_all = jnp.concatenate(old_log_probs_list, axis=0)
+            
+            # Perform multiple epochs of training
+            for epoch in range(num_epochs):
+                # Shuffle indices for this epoch
+                key, shuffle_key = jax.random.split(key)
+                indices = jax.random.permutation(shuffle_key, total_samples)
+                
+                # Split into minibatches and update
+                for mb_idx in range(num_minibatches):
+                    start_idx = mb_idx * minibatch_size
+                    end_idx = start_idx + minibatch_size
+                    mb_indices = indices[start_idx:end_idx]
+                    
+                    # Extract minibatch
+                    mb_obs = flat_obs[mb_indices]
+                    mb_actions = flat_actions[mb_indices]
+                    mb_returns = flat_returns[mb_indices]
+                    if flat_advantages is not None:
+                        mb_advantages = flat_advantages[mb_indices]
+                    else:
+                        mb_advantages = None
+                    
+                    # If old_log_probs exist, index into them for this minibatch
+                    if old_log_probs_all is not None:
+                        mb_old_log_probs = old_log_probs_all[mb_indices]
+                    else:
+                        mb_old_log_probs = None
 
-                # Calculate and log gradient norms
-                grad_norm = tree_norm(grads)
-                step_grad_norms.append(grad_norm)
+                    # Update network
+                    loss, grads = self.update(
+                        mb_obs,
+                        mb_actions,
+                        mb_returns,
+                        mb_advantages,
+                        mb_old_log_probs,
+                    )
+                    step_losses.append(loss)
+                    
+                    # Calculate and log gradient norms
+                    grad_norm = tree_norm(grads)
+                    step_grad_norms.append(grad_norm)
 
             # Print progress statistics
             actual_step = training_step + 1

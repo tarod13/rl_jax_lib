@@ -10,22 +10,51 @@ class ActorNetwork(nnx.Module):
             action_dim: int, 
             hidden_dim: int = 256,
             limits: jnp.ndarray = None, 
-            rngs: nnx.Rngs = None
+            rngs: nnx.Rngs = None,
+            nl: str = 'relu',
+            use_layernorm: bool = False,
         ):
         self.action_dim = action_dim
         self.hidden_dim = hidden_dim
         self.limits = nnx.Variable(jnp.abs(limits).max(axis=1)) if limits is not None else None
         self.rngs = rngs
+        self.nl = nl
+        self.use_layernorm = use_layernorm
 
         self.dense1 = nnx.Linear(obs_dim, hidden_dim, rngs=rngs)
         self.dense2 = nnx.Linear(hidden_dim, hidden_dim, rngs=rngs)
         self.policy_head_mean = nnx.Linear(hidden_dim, action_dim, rngs=rngs)
         self.policy_head_logstd = nnx.Linear(hidden_dim, action_dim, rngs=rngs)
+        
+        # Optional LayerNorm layers
+        if self.use_layernorm:
+            self.ln1 = nnx.LayerNorm(hidden_dim, rngs=rngs)
+            self.ln2 = nnx.LayerNorm(hidden_dim, rngs=rngs)
 
     def __call__(self, x):
         # Forward pass through shared layers
-        x = nnx.relu(self.dense1(x))
-        x = nnx.relu(self.dense2(x))
+        if self.nl == 'relu':
+            x = self.dense1(x)
+            if self.use_layernorm:
+                x = self.ln1(x)
+            x = nnx.relu(x)
+            
+            x = self.dense2(x)
+            if self.use_layernorm:
+                x = self.ln2(x)
+            x = nnx.relu(x)
+        elif self.nl == 'tanh':
+            x = self.dense1(x)
+            if self.use_layernorm:
+                x = self.ln1(x)
+            x = nnx.tanh(x)
+            
+            x = self.dense2(x)
+            if self.use_layernorm:
+                x = self.ln2(x)
+            x = nnx.tanh(x)
+        else:
+            raise ValueError(f"Unsupported non-linearity: {self.nl}")
 
         # Get action distribution parameters
         mean_action = self.policy_head_mean(x)

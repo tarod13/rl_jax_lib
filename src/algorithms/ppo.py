@@ -6,6 +6,7 @@ import optax
 
 from .on_policy import OnPolicyAlgorithm
 from ..networks import SeparateActorStateCriticNetwork
+from ..utils import clip_grads
 
 
 class PPO(OnPolicyAlgorithm):
@@ -21,6 +22,8 @@ class PPO(OnPolicyAlgorithm):
             hidden_dim=self.config.hidden_dim,
             limits=limits,
             rngs=rngs,
+            nl=self.config.nl,
+            use_layernorm=self.config.use_layernorm,
         )
 
         # Initialize optimizer
@@ -39,26 +42,35 @@ class PPO(OnPolicyAlgorithm):
         log_prob = log_probs.sum(axis=-1)
         return log_prob
     
-    def loss(self, model, obs, actions, returns, old_log_probs):
+    def loss(self, model, obs, actions, returns, advantages, old_log_probs):
         action_log_probs = self.get_log_prob(model, obs, actions)
-        likelihood_ratios = jnp.exp(action_log_probs - old_log_probs)
+        likelihood_ratios = jnp.exp((action_log_probs - old_log_probs))
         clipped_ratios = likelihood_ratios.clip(1-self.config.epsilon, 1+self.config.epsilon)
-        pessimistic_ratios = jnp.minimum(likelihood_ratios, clipped_ratios)
+        policy_loss = -jnp.mean(jnp.minimum(likelihood_ratios * advantages, clipped_ratios * advantages))
+
         predicted_values = model.critic(obs)
-        differences = returns - predicted_values
-        
-        policy_loss = -jnp.mean(pessimistic_ratios * jax.lax.stop_gradient(differences))
-        value_loss = jnp.mean(differences ** 2)
+        value_errors = returns - predicted_values
+        value_loss = jnp.mean(value_errors ** 2)
         return policy_loss + value_loss
 
     @nnx.jit
-    def update(self, obs, actions, returns, info={}):
-        # Get initial action (log-)likelihoods
-        if not 'old_log_probs' in info:
-            info['old_log_probs'] = self.get_log_prob(self.network, obs, actions)
-        old_log_probs = info['old_log_probs']
-
-        loss_fn = lambda model: self.loss(model, obs, actions, returns, old_log_probs)
+    def update(self, obs, actions, returns, advantages, old_log_probs):
+        """
+        Perform a single PPO update.
+        
+        Args:
+            obs: Observations [batch_size, obs_dim]
+            actions: Actions [batch_size, action_dim]
+            returns: Returns [batch_size]
+            old_log_probs: Log probabilities from the old policy [batch_size]
+            
+        Returns:
+            loss: Scalar loss value
+            grads: Gradients
+        """
+        loss_fn = lambda model: self.loss(model, obs, actions, returns, advantages, old_log_probs)
         loss, grads = nnx.value_and_grad(loss_fn)(self.network)
+        if self.config.max_grad_norm is not None:
+            grads = clip_grads(grads, max_norm=self.config.max_grad_norm)
         self.optimizer.update(self.network, grads)
-        return loss, grads, info
+        return loss, grads

@@ -13,9 +13,10 @@ class ActorCriticNetwork(ActorNetwork):
             action_dim: int, 
             hidden_dim: int = 256,
             limits: jnp.ndarray = None,
-            rngs: nnx.Rngs = None
+            rngs: nnx.Rngs = None,
+            use_layernorm: bool = False,
         ):
-        super().__init__(obs_dim, action_dim, hidden_dim, limits, rngs)
+        super().__init__(obs_dim, action_dim, hidden_dim, limits, rngs, use_layernorm=use_layernorm)
         self.action_embedding_layer = nnx.Linear(action_dim, hidden_dim, rngs=rngs)
         self.value_head = nnx.Linear(2*hidden_dim, 1, rngs=rngs)
 
@@ -43,7 +44,9 @@ class SeparateActorStateCriticNetwork(nnx.Module):
             action_dim: int, 
             hidden_dim: int = 256,
             limits: jnp.ndarray = None,
-            rngs: nnx.Rngs = None
+            rngs: nnx.Rngs = None,
+            nl: str = 'relu',
+            use_layernorm: bool = False,
         ):
         self.actor = ActorNetwork(
             obs_dim=obs_dim,
@@ -51,11 +54,15 @@ class SeparateActorStateCriticNetwork(nnx.Module):
             hidden_dim=hidden_dim,
             limits=limits,
             rngs=rngs,
+            nl=nl,
+            use_layernorm=use_layernorm,
         )
         self.critic = StateValueNetwork(
             obs_dim=obs_dim,
             hidden_dim=hidden_dim,
             rngs=rngs,
+            nl=nl,
+            use_layernorm=use_layernorm,
         )
 
     def __call__(self, x):

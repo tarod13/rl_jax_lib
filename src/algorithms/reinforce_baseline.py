@@ -21,6 +21,7 @@ class REINFORCEwithBaseline(OnPolicyAlgorithm):
             hidden_dim=self.config.hidden_dim,
             limits=limits,
             rngs=rngs,
+            nl=self.config.nl,
         )
 
         # Initialize optimizer
@@ -49,8 +50,8 @@ class REINFORCEwithBaseline(OnPolicyAlgorithm):
         return policy_loss + value_loss
 
     @nnx.jit
-    def update(self, obs, actions, returns, info={}):
+    def update(self, obs, actions, returns, advantages, old_log_probs):
         loss_fn = lambda model: self.loss(model, obs, actions, returns)
         loss, grads = nnx.value_and_grad(loss_fn)(self.network)
         self.optimizer.update(self.network, grads)
-        return loss, grads, {}
+        return loss, grads

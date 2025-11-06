@@ -1,5 +1,7 @@
 try:
-    from src.algorithms.ppo import PPO
+    from src.algorithms import (
+        PPO, REINFORCE, REINFORCEwithBaseline, REINFORCEwithBaselineIS
+    )
     from src.utils import (
         print_training_summary,
         save_training_plots,
@@ -15,7 +17,9 @@ except:
     if REPO_ROOT not in sys.path:
         sys.path.insert(0, str(REPO_ROOT))
     
-    from src.algorithms.ppo import PPO
+    from src.algorithms import (
+        PPO, REINFORCE, REINFORCEwithBaseline, REINFORCEwithBaselineIS
+    )
     from src.utils import (
         print_training_summary,
         save_training_plots,
@@ -29,33 +33,54 @@ import jax.numpy as jnp
 from types import SimpleNamespace
 
 
+# Map algorithm names to their classes
+ALGORITHM_MAP = {
+    'PPO': PPO,
+    'REINFORCE': REINFORCE,
+    'REINFORCEwithBaseline': REINFORCEwithBaseline,
+    'REINFORCEwithBaselineIS': REINFORCEwithBaselineIS,
+}
+
+
 @dataclass
 class Config:
-    num_rollouts: int = 100
+    # Algorithm selection
+    algorithm: str = 'PPO'  # 'PPO', 'REINFORCE', 'REINFORCEwithBaseline', 'REINFORCEwithBaselineIS'
+    
+    # Environment and rollout settings
+    num_rollouts: int = 1
     episode_length: int = 2048
     deterministic: bool = False
     seed: int = 42
     hidden_dim: int = 64
     env_name: str = 'hopper'
-    lr: float = 1e-5
-    num_training_steps: int = 1000
-    algorithm: str = 'PPO'  # Algorithm name for experiment tracking
-    
-    # Training parameters
-    # Minibatch mode (recommended): Set minibatch_size to split data into batches
-    # Legacy mode: Set minibatch_size=None to update on full batch
-    minibatch_size: int | None = 64  # Minibatch size K (None = use full batch)
-    num_epochs: int = 10  # Number of epochs/passes over the collected data
-    
+    lr: float = 3e-4
+    num_training_steps: int = 500
     gamma: float = 0.99
-    epsilon: float = 0.2
+    num_epochs: int = 10  # Number of epochs/updates-per-step over the collected data
+    nl: str = 'tanh'  # Non-linearity for networks: 'relu' or 'tanh'
+    use_layernorm: bool = True  # Use LayerNorm after each hidden layer
+    
+    # Bootstrap for final states (used by PPO and REINFORCEwithBaselineIS)
     use_bootstrap_for_final_states: bool = True
+    
+    # PPO-specific parameters
+    epsilon: float = 0.1  # clipping parameter
+    minibatch_size: int | None = 32  # Minibatch size K (None = use full batch)
+    max_grad_norm: float | None = 0.5  # Max norm for gradient clipping
+    
+    # Advantage handling parameters
+    use_gae: bool = True  # Use GAE instead of standard returns
+    gae_lambda: float = 0.95  # Lambda parameter for GAE (bias-variance tradeoff)
+    normalize_advantages: bool = True  # Whether to normalize advantages by substracting mean and dividing by stddev
     
     # Experiment tracking
     experiments_root: str = 'experiments'
     run_id: str | None = None  # Auto-generated if None
-    checkpoint_interval: int = 5  # Save every N steps
+    checkpoint_interval: int = 25  # Save every N steps
     keep_only_latest: bool = True  # Only keep the most recent checkpoint
+    experiment_ID: str = ""  # Optional experiment ID
+    experiment_description: str = ""  # Optional experiment description
     
     # Evaluation settings
     num_eval_episodes: int = 100  # Number of episodes for evaluation
@@ -67,11 +92,72 @@ class Config:
     resume_step: int | None = None  # Specific step to resume from
 
 
+def validate_config(config: Config) -> None:
+    """Validate that the specified algorithm exists."""
+    if config.algorithm not in ALGORITHM_MAP:
+        available = ", ".join(ALGORITHM_MAP.keys())
+        raise ValueError(
+            f"Unknown algorithm: {config.algorithm}. "
+            f"Available algorithms: {available}"
+        )
+
+
+def get_algorithm_class(algorithm_name: str):
+    """Get the algorithm class by name."""
+    return ALGORITHM_MAP[algorithm_name]
+
+
+def print_config_info(config: Config, agent) -> None:
+    """Print training configuration and parameters."""
+    print("="*60)
+    print(f"{config.algorithm} Training with Experiment Manager")
+    print("="*60)
+    print(f"Environment: {agent.config.env_name}")
+    print(f"Algorithm: {config.algorithm}")
+    
+    # Algorithm-specific parameter info
+    if config.algorithm == 'PPO':
+        print(f"Training mode: {'Minibatch (PPO-style)' if config.minibatch_size is not None else 'Full batch'}")
+        if config.minibatch_size is not None:
+            print(f"  Minibatch size: {config.minibatch_size}")
+            print(f"  Num epochs: {config.num_epochs}")
+            print(f"  Total samples per step: {config.num_rollouts * config.episode_length}")
+            print(f"  Updates per step: {config.num_epochs * (config.num_rollouts * config.episode_length // config.minibatch_size)}")
+        else:
+            print(f"  Num epochs: {config.num_epochs}")
+            print(f"  Updates per step: {config.num_epochs}")
+    else:
+        print(f"Updates per step: {config.num_updates_per_step}")
+    
+    # GAE information
+    if hasattr(config, 'use_gae') and config.use_gae:
+        print(f"Advantage estimation: GAE (λ={config.gae_lambda})")
+    else:
+        print(f"Advantage estimation: Standard returns")
+    
+    print(f"Rollouts per step: {config.num_rollouts}")
+    print(f"Episode length: {config.episode_length}")
+    print(f"Learning rate: {agent.config.lr}")
+    print(f"Hidden dim: {agent.config.hidden_dim}")
+    print(f"Gamma (discount): {agent.config.gamma}")
+    print(f"Non-linearity: {agent.config.nl}")
+    print(f"Seed: {agent.config.seed}")
+    print(f"Checkpoint interval: {config.checkpoint_interval}")
+    print(f"Evaluation episodes: {config.num_eval_episodes}")
+    print(f"Run eval on checkpoint: {config.run_eval_on_checkpoint}")
+    print("="*60 + "\n")
+
+
 if __name__ == "__main__":
     config = tyro.cli(Config)
     
+    # Validate algorithm choice
+    validate_config(config)
+    
+    AlgorithmClass = get_algorithm_class(config.algorithm)
+    
     print("="*60)
-    print("PPO Training with Experiment Manager")
+    print(f"{config.algorithm} Training")
     print("="*60)
     
     # Initialize experiment manager
@@ -84,18 +170,18 @@ if __name__ == "__main__":
     if config.resume_run_id is not None:
         print(f"Resuming from run: {config.resume_run_id}")
         
-        # Load the run's experiment manager and config
-        resume_exp_manager = ExperimentManager(
-            experiments_root=config.experiments_root,
-            run_id=config.resume_run_id
-        )
-        
         # Load config from the run
         run_config_dict = ExperimentManager.load_config(
             config.resume_run_id,
             experiments_root=config.experiments_root
         )
         run_config = SimpleNamespace(**run_config_dict)
+        
+        # Create experiment manager for the resume run
+        resume_exp_manager = ExperimentManager(
+            experiments_root=config.experiments_root,
+            run_id=config.resume_run_id
+        )
         
         # Determine which step to load from
         if config.resume_step is None:
@@ -109,7 +195,7 @@ if __name__ == "__main__":
         
         if config.resume_step is not None:
             # Load agent from checkpoint
-            agent, training_stats, loaded_step = PPO.load_checkpoint(
+            agent, training_stats, loaded_step = AlgorithmClass.load_checkpoint(
                 run_id=config.resume_run_id,
                 step=config.resume_step,
                 experiment_manager_class=ExperimentManager,
@@ -117,16 +203,14 @@ if __name__ == "__main__":
             )
             
             # Update agent's experiment manager to the new run (if creating new run)
-            # or keep the old one (if continuing in same run)
             if config.run_id is None:
-                # If no run_id specified, we're in a new run
                 agent.experiment_manager = exp_manager
             
             print(f"✅ Resumed from step {loaded_step}")
             start_step = loaded_step
         else:
             # Start fresh but use the config from the resumed run
-            agent = PPO(run_config, experiment_manager=exp_manager)
+            agent = AlgorithmClass(run_config, experiment_manager=exp_manager)
             training_stats = {
                 'loss_history': [],
                 'grad_norm_history': [],
@@ -136,7 +220,7 @@ if __name__ == "__main__":
             start_step = 0
     else:
         print("Starting new training run")
-        agent = PPO(config, experiment_manager=exp_manager)
+        agent = AlgorithmClass(config, experiment_manager=exp_manager)
         training_stats = {
             'loss_history': [],
             'grad_norm_history': [],
@@ -150,30 +234,9 @@ if __name__ == "__main__":
     
     # Print run information
     exp_manager.print_run_info()
+    print_config_info(config, agent)
     
-    print(f"Environment: {agent.config.env_name}")
-    print(f"Training steps: {start_step} → {config.num_training_steps}")
-    
-    # Print training parameters based on mode
-    if config.minibatch_size is not None:
-        print(f"Training mode: Minibatch (PPO-style)")
-        print(f"  Minibatch size: {config.minibatch_size}")
-        print(f"  Num epochs: {config.num_epochs}")
-        print(f"  Total samples per step: {config.num_rollouts * config.episode_length}")
-        print(f"  Updates per step: {config.num_epochs * (config.num_rollouts * config.episode_length // config.minibatch_size)}")
-    else:
-        print(f"Training mode: Full batch")
-        print(f"  Num epochs: {config.num_epochs}")
-        print(f"  Updates per step: {config.num_epochs}")
-    
-    print(f"Rollouts per step: {config.num_rollouts}")
-    print(f"Learning rate: {agent.config.lr}")
-    print(f"Hidden dim: {agent.config.hidden_dim}")
-    print(f"Seed: {agent.config.seed}")
-    print(f"Checkpoint interval: {config.checkpoint_interval}")
-    print(f"Evaluation episodes: {config.num_eval_episodes}")
-    print(f"Run eval on checkpoint: {config.run_eval_on_checkpoint}")
-    print("="*60 + "\n")
+    print(f"Training steps: {start_step} → {config.num_training_steps}\n")
     
     # Train the agent with checkpointing and evaluation
     training_stats_new = agent.train(
@@ -217,13 +280,14 @@ if __name__ == "__main__":
     )
     
     # Print summary using utility function
-    print_training_summary(training_stats, algorithm_name="PPO")
+    print_training_summary(training_stats, algorithm_name=config.algorithm)
     
     # Create and save plot using utility function
-    plot_path = exp_manager.get_plot_path("PPO")
-    save_training_plots(training_stats, plot_path, algorithm_name="PPO")
+    plot_path = exp_manager.get_plot_path(config.algorithm)
+    save_training_plots(training_stats, plot_path, algorithm_name=config.algorithm)
     
     print(f"\n✅ Training complete!")
+    print(f"Algorithm: {config.algorithm}")
     print(f"Run ID: {exp_manager.run_id}")
     print(f"Results saved to: {exp_manager.run_dir}")
     

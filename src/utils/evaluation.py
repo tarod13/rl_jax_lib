@@ -204,7 +204,7 @@ def compute_evaluation_metrics(trajectories):
     valid_mask = trajectories['valid']
     
     # Mask out invalid steps
-    masked_rewards = rewards * valid_mask
+    masked_rewards = jnp.where(valid_mask, rewards, 0.0)
     
     # Compute undiscounted returns (just sum of rewards)
     returns = jnp.sum(masked_rewards, axis=1)

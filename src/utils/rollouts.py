@@ -38,7 +38,6 @@ def single_rollout(env, model, key, initial_state, episode_length=1000, determin
         'done': jnp.empty(episode_length, dtype=bool),
         'next_obs': jnp.empty((episode_length,) + obs_shape),
         'step_idx': jnp.arange(episode_length),
-        'valid': jnp.empty(episode_length, dtype=bool),
     }
     
     def body_fn(_, carry):
@@ -64,7 +63,6 @@ def single_rollout(env, model, key, initial_state, episode_length=1000, determin
             'done': trajectory['done'].at[step_count].set(new_done_flag),
             'next_obs': trajectory['next_obs'].at[step_count].set(next_state.obs),
             'step_idx': trajectory['step_idx'],
-            'valid': trajectory['valid'].at[step_count].set(True),
         }
 
         # If done, reset for next step
@@ -169,8 +167,22 @@ def vectorized_rollouts_multi_env(
     return last_states, trajectories, key
 
 
-def compute_returns(trajectories, gamma=1.0, init_returns=None):
-    """Compute episode running returns with discount factor and proper validity masking.
+def compute_returns(trajectories, gamma=1.0, init_returns=None, use_gae=False, 
+                   gae_lambda=0.95, values=None, next_values=None):
+    """Compute episode running returns or GAE advantages.
+    
+    Args:
+        trajectories: Dictionary containing 'reward' and optionally 'done'
+        gamma: Discount factor
+        init_returns: Bootstrap values for final states (ignored if use_gae=True)
+        use_gae: If True, compute GAE advantages instead of returns
+        gae_lambda: Lambda parameter for GAE (used only if use_gae=True)
+        values: State values V(s_t) for each timestep (required if use_gae=True)
+        next_values: State values V(s_{t+1}) for each timestep (required if use_gae=True)
+    
+    Returns:
+        final_returns: Returns/advantages at t=0 for each episode
+        running_returns: Returns/advantages for all timesteps
     
     When a done signal is encountered, the return accumulation resets to 0, handling
     multiple episodes within a single trajectory.
@@ -178,31 +190,53 @@ def compute_returns(trajectories, gamma=1.0, init_returns=None):
     rewards = trajectories['reward']
     dones = trajectories.get('done', jnp.zeros_like(rewards, dtype=bool))
     
-    if 'valid' in trajectories:
-        valid_mask = trajectories['valid']
-        masked_rewards = rewards * valid_mask
+    if use_gae:
+        # Compute GAE advantages
+        if values is None or next_values is None:
+            raise ValueError("values and next_values must be provided when use_gae=True")
+        
+        # Compute TD errors: δ_t = r_t + γ * V(s_{t+1}) * (1 - done) - V(s_t)
+        td_errors = rewards + gamma * next_values * (1.0 - dones) - values
+        
+        # Initialize GAE accumulator (starting from the end of the trajectory)
+        init_gae = jnp.zeros(rewards.shape[0])  # Shape: (num_rollouts,)
+        
+        def gae_step(gae, td_and_done):
+            td, done = td_and_done
+            # GAE_t = δ_t + γ * λ * (1 - done) * GAE_{t+1}
+            updated_gae = td + gamma * gae_lambda * (1.0 - done) * gae
+            return updated_gae, updated_gae
+        
+        final_advantages, running_advantages = jax.lax.scan(
+            gae_step,
+            init=init_gae,
+            xs=(jnp.transpose(td_errors, (1, 0)), jnp.transpose(dones, (1, 0))),
+            reverse=True,
+        )
+        
+        return final_advantages, jnp.transpose(running_advantages, (1, 0))
+    
     else:
-        masked_rewards = rewards
-    
-    if init_returns is None:
-        init_returns = jnp.zeros(rewards.shape[0])  # Shape: (num_rollouts,)
-    
-    # If the final step has done=True, don't bootstrap with init_returns
-    init_returns = jnp.where(dones[:, -1], 0.0, init_returns)
-    
-    def discounted_sum(G, r_and_done):
-        r, done = r_and_done
-        updated_G = G * gamma * (1.0 - done) + r
-        return updated_G, updated_G
-    
-    final_returns, running_returns = jax.lax.scan(
-        discounted_sum, 
-        init=init_returns,
-        xs=(jnp.transpose(masked_rewards, (1, 0)), jnp.transpose(dones, (1, 0))),
-        reverse=True,
-    )  # Transpose so that the scan is along episode steps and not rollouts
+        # Compute regular discounted returns
+        if init_returns is None:
+            init_returns = jnp.zeros(rewards.shape[0])  # Shape: (num_rollouts,)
+        
+        # If the final step has done=True, don't bootstrap with init_returns
+        init_returns = jnp.where(dones[:, -1], 0.0, init_returns)
+        
+        def discounted_sum(G, r_and_done):
+            r, done = r_and_done
+            updated_G = G * gamma * (1.0 - done) + r
+            return updated_G, updated_G
+        
+        final_returns, running_returns = jax.lax.scan(
+            discounted_sum, 
+            init=init_returns,
+            xs=(jnp.transpose(rewards, (1, 0)), jnp.transpose(dones, (1, 0))),
+            reverse=True,
+        )  # Transpose so that the scan is along episode steps and not rollouts
 
-    return final_returns, jnp.transpose(running_returns, (1, 0))
+        return final_returns, jnp.transpose(running_returns, (1, 0))
 
 
 def rollout_statistics(trajectories, gamma=1.0):
