@@ -1,11 +1,11 @@
 - TODO
-    - Handle truncation/terminated signals
+    - Add adaptive metric summarization / store less often
     - Go through PPO list
         - Make initialization type explicit
         - Consider reward scaling or clipping
-    - Separate experiment and algorithm configs
     - Unify scripts
     - Add alternative metrics (runtime, gradient steps, samples, parameters)
+    - Simplify on-policy (remove multiple tags)
 
     - Add Q-learning (+ off-policy)
     - Add SAC
@@ -13,5 +13,6 @@
 
 - TO EVALUATE:
     - Test or fix comparison plot for list of experiment IDs
+    - Test that REINFORCE versions run
     - Test REINFORCE versions and PPO in common environments
 

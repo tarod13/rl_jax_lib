@@ -47,7 +47,7 @@ def evaluate_agent(
     )
     
     # Run rollouts until episodes complete (deterministic policy)
-    last_states, trajectories, _ = run_evaluation_rollouts(
+    episode_lengths, last_states, trajectories, _ = run_evaluation_rollouts(
         env=agent.env,
         model=agent.network,
         key=key,
@@ -57,7 +57,7 @@ def evaluate_agent(
     )
     
     # Compute undiscounted returns for completed episodes
-    returns, episode_lengths = compute_evaluation_metrics(trajectories)
+    returns, _ = compute_evaluation_metrics(trajectories)
     
     # Compute statistics
     eval_stats = {
@@ -109,9 +109,9 @@ def run_evaluation_rollouts(
     vectorized_eval_fn = jax.jit(jax.vmap(eval_episode_fn))
     
     # Run all episodes in parallel
-    last_states, trajectories = vectorized_eval_fn(episode_keys, initial_states)
+    episode_lengths, last_states, trajectories = vectorized_eval_fn(episode_keys, initial_states)
     
-    return last_states, trajectories, key
+    return episode_lengths, last_states, trajectories, key
 
 
 def _single_evaluation_episode(env, model, key, initial_state, max_episode_length):
@@ -130,7 +130,7 @@ def _single_evaluation_episode(env, model, key, initial_state, max_episode_lengt
         'reward': jnp.empty(max_episode_length),
         'done': jnp.empty(max_episode_length, dtype=bool),
         'next_obs': jnp.empty((max_episode_length,) + obs_shape),
-        'valid': jnp.empty(max_episode_length, dtype=bool),
+        'valid': jnp.zeros(max_episode_length, dtype=bool),
     }
     
     def cond_fn(carry):
@@ -161,7 +161,7 @@ def _single_evaluation_episode(env, model, key, initial_state, max_episode_lengt
             'reward': trajectory['reward'].at[step_count].set(next_state.reward),
             'done': trajectory['done'].at[step_count].set(new_done_flag),
             'next_obs': trajectory['next_obs'].at[step_count].set(next_state.obs),
-            'valid': trajectory['valid'].at[step_count].set(True),
+            'valid': trajectory['valid'].at[step_count].set(jnp.asarray(True)),
         }
         
         # Update episode done flag
@@ -170,13 +170,14 @@ def _single_evaluation_episode(env, model, key, initial_state, max_episode_lengt
         return step_count + 1, next_state, updated_trajectory, episode_done
     
     # Initial carry: not done yet
-    initial_carry = (0, initial_state, empty_trajectory, False)
+    initial_carry = (0, initial_state, empty_trajectory, jnp.asarray(False))
     final_carry = jax.lax.while_loop(cond_fn, body_fn, initial_carry)
     
+    episode_lenght = final_carry[0]
     last_state = final_carry[1]
     trajectory = final_carry[2]
     
-    return last_state, trajectory
+    return episode_lenght, last_state, trajectory
 
 
 def _safe_clip(action, limits):
