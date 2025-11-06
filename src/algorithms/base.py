@@ -17,7 +17,7 @@ class RLAlgorithm(nnx.Module, ABC):
         self.experiment_manager = experiment_manager
         
         # Initialize environment
-        self.env = envs.get_environment(config.env_name)
+        self.env = envs.create(config.env_name, auto_reset=False)  # Disable auto-reset here; handle manually in rollouts
         self.action_dim = self.env.action_size
         self.obs_dim = self.env.observation_size
 

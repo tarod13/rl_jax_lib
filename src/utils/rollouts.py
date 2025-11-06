@@ -36,6 +36,7 @@ def single_rollout(env, model, key, initial_state, episode_length=1000, determin
         'action': jnp.empty((episode_length,) + action_shape),
         'reward': jnp.empty(episode_length),
         'done': jnp.empty(episode_length, dtype=bool),
+        'truncated': jnp.empty(episode_length, dtype=bool),
         'next_obs': jnp.empty((episode_length,) + obs_shape),
         'step_idx': jnp.arange(episode_length),
     }
@@ -53,14 +54,17 @@ def single_rollout(env, model, key, initial_state, episode_length=1000, determin
         action = safe_action_clipping(action, getattr(env.sys, 'actuator_ctrlrange', None))
         
         next_state = env.step(state, action)
-        new_done_flag = next_state.done.astype(bool)
-        
+
+        done_flag = next_state.info['episode_done'].astype(bool)
+        truncated_flag = next_state.info['truncation'].astype(bool)
+
         # Update trajectory at current step
         updated_trajectory = {
             'obs': trajectory['obs'].at[step_count].set(obs),
             'action': trajectory['action'].at[step_count].set(action),
             'reward': trajectory['reward'].at[step_count].set(next_state.reward),
-            'done': trajectory['done'].at[step_count].set(new_done_flag),
+            'done': trajectory['done'].at[step_count].set(done_flag),
+            'truncated': trajectory['truncated'].at[step_count].set(truncated_flag),
             'next_obs': trajectory['next_obs'].at[step_count].set(next_state.obs),
             'step_idx': trajectory['step_idx'],
         }
@@ -68,7 +72,7 @@ def single_rollout(env, model, key, initial_state, episode_length=1000, determin
         # If done, reset for next step
         key, reset_key = jax.random.split(key)
         next_state = jax.lax.cond(
-            new_done_flag,
+            done_flag,
             lambda _: env.reset(reset_key),
             lambda _: next_state,
             operand=None,
@@ -189,6 +193,7 @@ def compute_returns(trajectories, gamma=1.0, init_returns=None, use_gae=False,
     """
     rewards = trajectories['reward']
     dones = trajectories.get('done', jnp.zeros_like(rewards, dtype=bool))
+    truncations = trajectories.get('truncated', jnp.zeros_like(rewards, dtype=bool))
     
     if use_gae:
         # Compute GAE advantages
@@ -196,8 +201,9 @@ def compute_returns(trajectories, gamma=1.0, init_returns=None, use_gae=False,
             raise ValueError("values and next_values must be provided when use_gae=True")
         
         # Compute TD errors: δ_t = r_t + γ * V(s_{t+1}) * (1 - done) - V(s_t)
-        td_errors = rewards + gamma * next_values * (1.0 - dones) - values
-        
+        dones_not_truncated = dones * (1.0 - truncations)
+        td_errors = rewards + gamma * next_values * (1.0 - dones_not_truncated) - values  # Dones_not_truncated since bootstrapping occurs on truncation
+
         # Initialize GAE accumulator (starting from the end of the trajectory)
         init_gae = jnp.zeros(rewards.shape[0])  # Shape: (num_rollouts,)
         
@@ -210,7 +216,7 @@ def compute_returns(trajectories, gamma=1.0, init_returns=None, use_gae=False,
         final_advantages, running_advantages = jax.lax.scan(
             gae_step,
             init=init_gae,
-            xs=(jnp.transpose(td_errors, (1, 0)), jnp.transpose(dones, (1, 0))),
+            xs=(jnp.transpose(td_errors, (1, 0)), jnp.transpose(dones, (1, 0))),  # Done instead of dones_not_truncated to reset on episode end
             reverse=True,
         )
         

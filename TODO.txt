@@ -12,6 +12,7 @@
     - Add TD3
 
 - TO EVALUATE:
+    - Check compute_returns and rollout_statistics
     - Test or fix comparison plot for list of experiment IDs
     - Test that REINFORCE versions run
     - Test REINFORCE versions and PPO in common environments

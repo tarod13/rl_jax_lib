@@ -4,7 +4,7 @@ from flax import nnx
 import optax
 
 from .on_policy import OnPolicyAlgorithm
-from ..networks import ActorNetwork
+from ..networks import StochasticActorNetwork
 
 
 class REINFORCE(OnPolicyAlgorithm):
@@ -14,7 +14,7 @@ class REINFORCE(OnPolicyAlgorithm):
         # Initialize network
         rngs = nnx.Rngs(self.config.seed)
         limits = getattr(self.env.sys, 'actuator_ctrlrange', None)
-        self.network = ActorNetwork(
+        self.network = StochasticActorNetwork(
             obs_dim=self.obs_dim,
             action_dim=self.action_dim,
             hidden_dim=self.config.hidden_dim,
