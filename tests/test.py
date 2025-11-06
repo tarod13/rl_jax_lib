@@ -144,6 +144,7 @@ if __name__ == "__main__":
     
     # Create algorithm config with overrides
     algo_config = create_config_from_args(AlgoConfigClass, args)
+    algo_config.algorithm = algorithm  # Ensure algorithm name is set
     
     # Validate algorithm
     validate_config(algo_config)
