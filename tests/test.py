@@ -159,7 +159,7 @@ if __name__ == "__main__":
     # Initialize experiment manager
     exp_manager = ExperimentManager(
         experiments_root=exp_config.experiments_root,
-        run_id=exp_config.run_id
+        run_id=exp_config.run_id,
     )
     
     # Resume from checkpoint if specified

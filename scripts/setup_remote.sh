@@ -3,7 +3,7 @@
 
 # Force clear all modules and load required system modules
 module --force purge
-module load StdEnv/2023 gcc/14.3 python/3.11 cuda/12.9 mujoco/3.3.0
+module load StdEnv/2023 gcc/14.3 python/3.11 cuda/12.9 scipy-stack/2024b  mujoco/3.3.0
 
 # Create environment only if it doesn't exist
 if [ ! -d ~/ENV ]; then
@@ -22,7 +22,7 @@ pip install jax flax optax tensorboard
 pip install --no-deps brax
 
 # Install brax dependencies manually (excluding mujoco which we have from module)
-pip install etils flask flask-cors jaxopt jinja2 ml-collections mujoco-mjx==3.3.0 tensorboardx trimesh
+pip install etils flask flask-cors jaxopt jinja2 ml-collections mujoco-mjx==3.3.0 tensorboardx trimesh flashbax
 
 # Install additional utility packages
 pip install tqdm tyro
